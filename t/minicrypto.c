@@ -50,7 +50,7 @@ static void test_secp256r1_sign(void)
     uint32_t sigbuf_small[128];
 
     uECC_make_key(pub, signer.key, uECC_secp256r1());
-    ptls_buffer_init(&sigbuf, sigbuf_small, sizeof(sigbuf_small));
+    ptls_buffer_init_tx(&sigbuf, sigbuf_small, sizeof(sigbuf_small));
 
     ok(secp256r1sha256_sign(&signer.super, NULL, NULL, &selected, &sigbuf, ptls_iovec_init(msg, 32),
                             (uint16_t[]){PTLS_SIGNATURE_ECDSA_SECP256R1_SHA256}, 1) == 0);
@@ -76,9 +76,9 @@ static void test_hrr(void)
 
     client = ptls_new(&client_ctx, 0);
     server = ptls_new(ctx_peer, 1);
-    ptls_buffer_init(&cbuf, cbuf_small, sizeof(cbuf_small));
-    ptls_buffer_init(&sbuf, sbuf_small, sizeof(sbuf_small));
-    ptls_buffer_init(&decbuf, decbuf_small, sizeof(decbuf_small));
+    ptls_buffer_init_tx(&cbuf, cbuf_small, sizeof(cbuf_small));
+    ptls_buffer_init_tx(&sbuf, sbuf_small, sizeof(sbuf_small));
+    ptls_buffer_init_rx(&decbuf, decbuf_small, sizeof(decbuf_small));
 
     ret = ptls_handshake(client, &cbuf, NULL, NULL, NULL);
     ok(ret == PTLS_ERROR_IN_PROGRESS);

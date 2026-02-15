@@ -478,7 +478,7 @@ int ptls_mbedtls_sign_certificate(ptls_sign_certificate_t *_self, ptls_t *tls, p
             } else if (sign_algo != PSA_ALG_RSA_PKCS1V15_SIGN_RAW) {
                 nb_bytes *= 2;
             }
-            if ((ret = ptls_buffer_reserve(outbuf, nb_bytes)) == 0) {
+            if ((ret = ptls_buffer_reserve(outbuf, nb_bytes, outbuf->tx)) == 0) {
                 size_t signature_length = 0;
                 if (psa_sign_hash(self->key_id, sign_algo, hash_value, hash_length, outbuf->base + outbuf->off, nb_bytes,
                                   &signature_length) != 0) {

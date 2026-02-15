@@ -56,14 +56,14 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 
     // buffers
     ptls_buffer_t client_encbuf;
-    ptls_buffer_init(&client_encbuf, "", 0);
+    ptls_buffer_init_tx(&client_encbuf, "", 0);
 
     // generate client_hello
     ptls_handshake(tls_client, &client_encbuf, NULL, 0, &hsprop);
 
     // reset buffer
     ptls_buffer_dispose(&client_encbuf);
-    ptls_buffer_init(&client_encbuf, "", 0);
+    ptls_buffer_init_tx(&client_encbuf, "", 0);
 
     // accept server
     size_t consumed = size;
@@ -74,7 +74,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
         size = size - consumed;
         // reset buffer
         ptls_buffer_dispose(&client_encbuf);
-        ptls_buffer_init(&client_encbuf, "", 0);
+        ptls_buffer_init_rx(&client_encbuf, "", 0);
         // receive messages
         ptls_receive(tls_client, &client_encbuf, data + consumed, &size);
     }

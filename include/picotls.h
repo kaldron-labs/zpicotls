@@ -355,6 +355,7 @@ typedef struct st_ptls_buffer_t {
     uint32_t off;
     uint8_t is_allocated; /* boolean */
     uint8_t align_bits;   /* if particular alignment is required, set to log2(alignment); otherwize zero */
+    uint8_t tx;           /* direction: 0 for receive-side, 1 for transmit-side */
 } ptls_buffer_t;
 
 /**
@@ -1192,8 +1193,17 @@ typedef struct st_ptls_handshake_properties_t {
 static ptls_iovec_t ptls_iovec_init(const void *p, size_t len);
 /**
  * initializes a buffer, setting the default destination to the small buffer provided as the argument.
+ * `tx` is direction (0: receive-side, 1: transmit-side)
  */
-static void ptls_buffer_init(ptls_buffer_t *buf, void *smallbuf, uint32_t smallbuf_size);
+static void ptls_buffer_init(ptls_buffer_t *buf, void *smallbuf, uint32_t smallbuf_size, int tx);
+/**
+ * initializes a receive-side buffer
+ */
+static void ptls_buffer_init_rx(ptls_buffer_t *buf, void *smallbuf, uint32_t smallbuf_size);
+/**
+ * initializes a transmit-side buffer
+ */
+static void ptls_buffer_init_tx(ptls_buffer_t *buf, void *smallbuf, uint32_t smallbuf_size);
 /**
  * disposes a buffer, freeing resources allocated by the buffer itself (if any)
  */
@@ -1205,11 +1215,11 @@ void ptls_buffer__release_memory(ptls_buffer_t *buf);
 /**
  * reserves space for additional amount of memory
  */
-int ptls_buffer_reserve(ptls_buffer_t *buf, uint32_t delta);
+int ptls_buffer_reserve(ptls_buffer_t *buf, uint32_t delta, int tx);
 /**
  * reserves space for additional amount of memory, requiring `buf->base` to follow specified alignment
  */
-int ptls_buffer_reserve_aligned(ptls_buffer_t *buf, uint32_t delta, uint8_t align_bits);
+int ptls_buffer_reserve_aligned(ptls_buffer_t *buf, uint32_t delta, uint8_t align_bits, int tx);
 /**
  * internal
  */
@@ -1270,7 +1280,7 @@ static uint8_t *ptls_encode_quicint(uint8_t *p, uint64_t v);
 
 #define ptls_buffer_push_quicint(buf, v)                                                                                           \
     do {                                                                                                                           \
-        if ((ret = ptls_buffer_reserve((buf), PTLS_ENCODE_QUICINT_CAPACITY)) != 0)                                                 \
+        if ((ret = ptls_buffer_reserve((buf), PTLS_ENCODE_QUICINT_CAPACITY, (buf)->tx)) != 0)                                     \
             goto Exit;                                                                                                             \
         uint8_t *d = ptls_encode_quicint((buf)->base + (buf)->off, (v));                                                           \
         (buf)->off = d - (buf)->base;                                                                                              \
@@ -1904,6 +1914,7 @@ void ptls__key_schedule_update_hash(ptls_key_schedule_t *sched, const uint8_t *m
  * - this can only be overridden early in program initialization
  * - any override must be accompanied by a paired ptls_buffer_free() implementation
  * - exclusively used to grow existing buffers
+ * - `tx` indicates direction (0: receive-side, 1: transmit-side)
  * - the implementation contract is as follows:
  *   - the current base pointer is passed in buf->base
  *   - the implementation should allocate a new buffer >= capacity
@@ -1930,7 +1941,7 @@ void ptls__key_schedule_update_hash(ptls_key_schedule_t *sched, const uint8_t *m
  * - all implementations must respect align_bits
  * - returns NULL on failure
  */
-extern void *(*ptls_buffer_alloc)(ptls_buffer_t *buf, uint32_t capacity, uint8_t align_bits);
+extern void *(*ptls_buffer_alloc)(ptls_buffer_t *buf, uint32_t capacity, uint8_t align_bits, int tx);
 /**
  * free memory for buffer
  * - this can only be overridden early in program initialization
@@ -1939,11 +1950,12 @@ extern void *(*ptls_buffer_alloc)(ptls_buffer_t *buf, uint32_t capacity, uint8_t
  *   previously grown by ptls_buffer_alloc(); if the smallbuf passed to
  *   ptls_buffer_init() requires freeing following a ptls_buffer_dispose(),
  *   that is the caller's responsibility
+ * - `tx` indicates direction (0: receive-side, 1: transmit-side)
  * - buf->origin can be used to distinguish application-originated buffers
  *   from internal buffers (see pts_buffer_alloc comment above)
  * - returns NULL on failure
  */
-extern void (*ptls_buffer_free)(ptls_buffer_t *buf);
+extern void (*ptls_buffer_free)(ptls_buffer_t *buf, int tx);
 /**
  * clears memory
  */
@@ -2045,8 +2057,9 @@ inline ptls_iovec_t ptls_iovec_init(const void *p, size_t len)
     return r;
 }
 
-inline void ptls_buffer_init(ptls_buffer_t *buf, void *smallbuf, uint32_t smallbuf_size)
+inline void ptls_buffer_init(ptls_buffer_t *buf, void *smallbuf, uint32_t smallbuf_size, int tx)
 {
+    assert(tx == 0 || tx == 1);
     assert(smallbuf != NULL);
     buf->base = (uint8_t *)smallbuf;
     buf->origin = NULL;
@@ -2054,12 +2067,23 @@ inline void ptls_buffer_init(ptls_buffer_t *buf, void *smallbuf, uint32_t smallb
     buf->off = 0;
     buf->is_allocated = 0;
     buf->align_bits = 0;
+    buf->tx = (uint8_t)tx;
+}
+
+inline void ptls_buffer_init_rx(ptls_buffer_t *buf, void *smallbuf, uint32_t smallbuf_size)
+{
+    ptls_buffer_init(buf, smallbuf, smallbuf_size, 0);
+}
+
+inline void ptls_buffer_init_tx(ptls_buffer_t *buf, void *smallbuf, uint32_t smallbuf_size)
+{
+    ptls_buffer_init(buf, smallbuf, smallbuf_size, 1);
 }
 
 inline void ptls_buffer_dispose(ptls_buffer_t *buf)
 {
     ptls_buffer__release_memory(buf);
-    *buf = (ptls_buffer_t){NULL, NULL, 0, 0, 0, 0};
+    *buf = (ptls_buffer_t){NULL, NULL, 0, 0, 0, 0, 0};
 }
 
 inline uint8_t *ptls_encode_quicint(uint8_t *p, uint64_t v)

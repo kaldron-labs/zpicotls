@@ -1182,7 +1182,7 @@ static int do_sign(EVP_PKEY *key, const ptls_openssl_signature_scheme_t *scheme,
             ret = PTLS_ERROR_LIBRARY;
             goto Exit;
         }
-        if ((ret = ptls_buffer_reserve(outbuf, siglen)) != 0)
+        if ((ret = ptls_buffer_reserve(outbuf, siglen, outbuf->tx)) != 0)
             goto Exit;
         if (EVP_DigestSign(ctx, outbuf->base + outbuf->off, &siglen, input.base, input.len) != 1) {
             ret = PTLS_ERROR_LIBRARY;
@@ -1225,7 +1225,7 @@ static int do_sign(EVP_PKEY *key, const ptls_openssl_signature_scheme_t *scheme,
         }
 #endif
         /* Otherwise, generate signature synchronously. */
-        if ((ret = ptls_buffer_reserve(outbuf, siglen)) != 0)
+        if ((ret = ptls_buffer_reserve(outbuf, siglen, outbuf->tx)) != 0)
             goto Exit;
         if (EVP_DigestSignFinal(ctx, outbuf->base + outbuf->off, &siglen) != 1) {
             ret = PTLS_ERROR_LIBRARY;
@@ -2108,7 +2108,8 @@ int ptls_openssl_encrypt_ticket(ptls_buffer_t *buf, ptls_iovec_t src,
         goto Exit;
     }
 
-    if ((ret = ptls_buffer_reserve(buf, TICKET_LABEL_SIZE + TICKET_IV_SIZE + src.len + EVP_MAX_BLOCK_LENGTH + EVP_MAX_MD_SIZE)) !=
+    if ((ret = ptls_buffer_reserve(buf, TICKET_LABEL_SIZE + TICKET_IV_SIZE + src.len + EVP_MAX_BLOCK_LENGTH + EVP_MAX_MD_SIZE,
+                                   buf->tx)) !=
         0)
         goto Exit;
     dst = buf->base + buf->off;
@@ -2198,7 +2199,7 @@ int ptls_openssl_decrypt_ticket(ptls_buffer_t *buf, ptls_iovec_t src,
     src.len -= TICKET_LABEL_SIZE + TICKET_IV_SIZE;
 
     /* decrypt */
-    if ((ret = ptls_buffer_reserve(buf, src.len)) != 0)
+    if ((ret = ptls_buffer_reserve(buf, src.len, buf->tx)) != 0)
         goto Exit;
     if (!EVP_DecryptUpdate(cctx, buf->base + buf->off, &clen, src.base, (int)src.len)) {
         ret = PTLS_ERROR_LIBRARY;
@@ -2246,7 +2247,8 @@ int ptls_openssl_encrypt_ticket_evp(ptls_buffer_t *buf, ptls_iovec_t src,
         goto Exit;
     }
 
-    if ((ret = ptls_buffer_reserve(buf, TICKET_LABEL_SIZE + TICKET_IV_SIZE + src.len + EVP_MAX_BLOCK_LENGTH + EVP_MAX_MD_SIZE)) !=
+    if ((ret = ptls_buffer_reserve(buf, TICKET_LABEL_SIZE + TICKET_IV_SIZE + src.len + EVP_MAX_BLOCK_LENGTH + EVP_MAX_MD_SIZE,
+                                   buf->tx)) !=
         0)
         goto Exit;
     dst = buf->base + buf->off;
@@ -2346,7 +2348,7 @@ int ptls_openssl_decrypt_ticket_evp(ptls_buffer_t *buf, ptls_iovec_t src,
     src.len -= TICKET_LABEL_SIZE + TICKET_IV_SIZE;
 
     /* decrypt */
-    if ((ret = ptls_buffer_reserve(buf, src.len)) != 0)
+    if ((ret = ptls_buffer_reserve(buf, src.len, buf->tx)) != 0)
         goto Exit;
     if (!EVP_DecryptUpdate(cctx, buf->base + buf->off, &clen, src.base, (int)src.len)) {
         ret = PTLS_ERROR_LIBRARY;

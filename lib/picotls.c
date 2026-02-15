@@ -563,8 +563,18 @@ static char *duplicate_as_str(const void *src, size_t len)
     return dst;
 }
 
-static void buffer_free(ptls_buffer_t *buf)
+static int buffer_require_direction(ptls_buffer_t *buf, int tx)
 {
+    assert(tx == 0 || tx == 1);
+    if (buf->tx == tx)
+        return 0;
+    assert(!"ptls buffer direction mismatch");
+    return PTLS_ERROR_LIBRARY;
+}
+
+static void buffer_free(ptls_buffer_t *buf, int tx)
+{
+    (void)tx;
 #ifdef _WIN32
     if (buf->align_bits != 0)
         _aligned_free(buf->base);
@@ -575,16 +585,16 @@ static void buffer_free(ptls_buffer_t *buf)
 #endif
 }
 
-void (*ptls_buffer_free)(ptls_buffer_t *buf) = buffer_free;
+void (*ptls_buffer_free)(ptls_buffer_t *buf, int tx) = buffer_free;
 
 void ptls_buffer__release_memory(ptls_buffer_t *buf)
 {
     ptls_clear_memory(buf->base, buf->off);
     if (buf->is_allocated)
-        ptls_buffer_free(buf);
+        ptls_buffer_free(buf, buf->tx);
 }
 
-static void *buffer_alloc(ptls_buffer_t *buf, uint32_t new_capacity, uint8_t align_bits)
+static void *buffer_alloc(ptls_buffer_t *buf, uint32_t new_capacity, uint8_t align_bits, int tx)
 {
     void *newp = NULL;
     if (align_bits != 0) {
@@ -602,23 +612,23 @@ static void *buffer_alloc(ptls_buffer_t *buf, uint32_t new_capacity, uint8_t ali
     if (buf->off) memcpy(newp, buf->base, buf->off);
     ptls_clear_memory(buf->base, buf->off);
     if (buf->is_allocated)
-        ptls_buffer_free(buf);
+        ptls_buffer_free(buf, buf->tx);
     buf->base = newp;
     buf->capacity = new_capacity;
     buf->is_allocated = 1;
     buf->align_bits = align_bits;
+    buf->tx = (uint8_t)tx;
     return newp;
 }
 
-void *(*ptls_buffer_alloc)(ptls_buffer_t *buf, uint32_t capacity, uint8_t align_bits) = buffer_alloc;
+void *(*ptls_buffer_alloc)(ptls_buffer_t *buf, uint32_t capacity, uint8_t align_bits, int tx) = buffer_alloc;
 
-int ptls_buffer_reserve(ptls_buffer_t *buf, uint32_t delta)
+int ptls_buffer_reserve_aligned(ptls_buffer_t *buf, uint32_t delta, uint8_t align_bits, int tx)
 {
-    return ptls_buffer_reserve_aligned(buf, delta, 0);
-}
+    int ret;
+    if ((ret = buffer_require_direction(buf, tx)) != 0)
+        return ret;
 
-int ptls_buffer_reserve_aligned(ptls_buffer_t *buf, uint32_t delta, uint8_t align_bits)
-{
     if (buf->base == NULL)
         return PTLS_ERROR_NO_MEMORY;
 
@@ -645,11 +655,16 @@ int ptls_buffer_reserve_aligned(ptls_buffer_t *buf, uint32_t delta, uint8_t alig
             new_capacity *= 2;
         }
 #endif
-        if ((newp = ptls_buffer_alloc(buf, new_capacity, align_bits)) == NULL)
+        if ((newp = ptls_buffer_alloc(buf, new_capacity, align_bits, tx)) == NULL)
             return PTLS_ERROR_NO_MEMORY;
     }
 
     return 0;
+}
+
+int ptls_buffer_reserve(ptls_buffer_t *buf, uint32_t delta, int tx)
+{
+    return ptls_buffer_reserve_aligned(buf, delta, 0, tx);
 }
 
 int ptls_buffer__do_pushv(ptls_buffer_t *buf, const void *src, size_t len)
@@ -658,7 +673,7 @@ int ptls_buffer__do_pushv(ptls_buffer_t *buf, const void *src, size_t len)
 
     if (len == 0)
         return 0;
-    if ((ret = ptls_buffer_reserve(buf, len)) != 0)
+    if ((ret = ptls_buffer_reserve(buf, len, buf->tx)) != 0)
         return ret;
     memcpy(buf->base + buf->off, src, len);
     buf->off += len;
@@ -785,7 +800,7 @@ static int buffer_push_encrypted_records(ptls_buffer_t *buf, uint8_t type, const
                 /* reserve memory */
                 if ((ret = ptls_buffer_reserve_aligned(
                          buf, enc->aead->algo->tls12.record_iv_size + chunk_size + enc->aead->algo->tag_size,
-                         enc->aead->algo->align_bits)) != 0)
+                         enc->aead->algo->align_bits, 1)) != 0)
                     goto Exit;
                 /* determine nonce, as well as prepending that walue as the record IV (AES-GCM) */
                 uint64_t nonce;
@@ -807,7 +822,7 @@ static int buffer_push_encrypted_records(ptls_buffer_t *buf, uint8_t type, const
         } else {
             buffer_push_record(buf, PTLS_CONTENT_TYPE_APPDATA, {
                 if ((ret = ptls_buffer_reserve_aligned(buf, chunk_size + enc->aead->algo->tag_size + 1,
-                                                       enc->aead->algo->align_bits)) != 0)
+                                                          enc->aead->algo->align_bits, 1)) != 0)
                     goto Exit;
                 buf->off += aead_encrypt(enc, buf->base + buf->off, src, chunk_size, type);
             });
@@ -830,7 +845,7 @@ static int buffer_encrypt_record(ptls_buffer_t *buf, size_t rec_start, struct st
      * is used, as this function will be called no more than once per connection, for encrypting an alert.) */
     if (!enc->tls12 && bodylen <= PTLS_MAX_PLAINTEXT_RECORD_SIZE) {
         size_t overhead = 1 + enc->aead->algo->tag_size;
-        if ((ret = ptls_buffer_reserve_aligned(buf, overhead, enc->aead->algo->align_bits)) != 0)
+        if ((ret = ptls_buffer_reserve_aligned(buf, overhead, enc->aead->algo->align_bits, 1)) != 0)
             return ret;
         size_t encrypted_len = aead_encrypt(enc, buf->base + rec_start + 5, buf->base + rec_start + 5, bodylen, type);
         assert(encrypted_len == bodylen + overhead);
@@ -1160,7 +1175,7 @@ static int client_setup_ech(struct st_ptls_ech_t *ech, struct st_decoded_ech_con
     int ret;
 
     /* setup `enc` and `aead` by running HPKE */
-    ptls_buffer_init(&infobuf, infobuf_smallbuf, sizeof(infobuf_smallbuf));
+    ptls_buffer_init_tx(&infobuf, infobuf_smallbuf, sizeof(infobuf_smallbuf));
     ptls_buffer_pushv(&infobuf, ech_info_prefix, sizeof(ech_info_prefix));
     ptls_buffer_pushv(&infobuf, decoded->bytes.base, decoded->bytes.len);
     if ((ret = ptls_hpke_setup_base_s(decoded->kem, decoded->cipher, &ech->client.enc, &ech->aead, decoded->public_key,
@@ -1732,7 +1747,7 @@ static int encode_session_identifier(ptls_context_t *ctx, ptls_buffer_t *buf, ui
         ptls_buffer_push64(buf, ctx->get_time->cb(ctx->get_time));
         /* resumption master secret */
         ptls_buffer_push_block(buf, 2, {
-            if ((ret = ptls_buffer_reserve(buf, sched->hashes[0].algo->digest_size)) != 0)
+            if ((ret = ptls_buffer_reserve(buf, sched->hashes[0].algo->digest_size, 1)) != 0)
                 goto Exit;
             if ((ret = derive_resumption_secret(sched, buf->base + buf->off, ticket_nonce)) != 0)
                 goto Exit;
@@ -1868,7 +1883,7 @@ static int send_finished(ptls_t *tls, ptls_message_emitter_t *emitter)
     int ret;
 
     ptls_push_message(emitter, tls->key_schedule, PTLS_HANDSHAKE_TYPE_FINISHED, {
-        if ((ret = ptls_buffer_reserve(emitter->buf, tls->key_schedule->hashes[0].algo->digest_size)) != 0)
+        if ((ret = ptls_buffer_reserve(emitter->buf, tls->key_schedule->hashes[0].algo->digest_size, 1)) != 0)
             goto Exit;
         if ((ret = calc_verify_data(emitter->buf->base + emitter->buf->off, tls->key_schedule,
                                     tls->traffic_protection.enc.secret)) != 0)
@@ -1891,7 +1906,7 @@ static int send_session_ticket(ptls_t *tls, ptls_message_emitter_t *emitter)
     assert(tls->ctx->ticket_lifetime != 0);
     assert(tls->ctx->encrypt_ticket != NULL);
 
-    ptls_buffer_init(&session_id, session_id_smallbuf, sizeof(session_id_smallbuf));
+    ptls_buffer_init_tx(&session_id, session_id_smallbuf, sizeof(session_id_smallbuf));
 
     { /* calculate verify-data that will be sent by the client */
         size_t orig_off = emitter->buf->off;
@@ -1901,7 +1916,7 @@ static int send_session_ticket(ptls_t *tls, ptls_message_emitter_t *emitter)
             emitter->buf->off = orig_off;
         }
         ptls_buffer_push_message_body(emitter->buf, tls->key_schedule, PTLS_HANDSHAKE_TYPE_FINISHED, {
-            if ((ret = ptls_buffer_reserve(emitter->buf, tls->key_schedule->hashes[0].algo->digest_size)) != 0)
+            if ((ret = ptls_buffer_reserve(emitter->buf, tls->key_schedule->hashes[0].algo->digest_size, 1)) != 0)
                 goto Exit;
             if ((ret = calc_verify_data(emitter->buf->base + emitter->buf->off, tls->key_schedule,
                                         tls->pending_handshake_secret != NULL ? tls->pending_handshake_secret
@@ -2204,7 +2219,7 @@ static int encode_client_hello(ptls_context_t *ctx, ptls_buffer_t *sendbuf, enum
                     ptls_buffer_push_block(sendbuf, 2, {
                         assert(sendbuf->off - ext_payload_from ==
                                outer_ech_header_size(is_second_flight ? 0 : ech->client.enc.len));
-                        if ((ret = ptls_buffer_reserve(sendbuf, *ech_size_offset)) != 0)
+                        if ((ret = ptls_buffer_reserve(sendbuf, *ech_size_offset, 1)) != 0)
                             goto Exit;
                         memset(sendbuf->base + sendbuf->off, 0, *ech_size_offset);
                         sendbuf->off += *ech_size_offset;
@@ -2316,7 +2331,7 @@ static int encode_client_hello(ptls_context_t *ctx, ptls_buffer_t *sendbuf, enum
                     ptls_buffer_push_block(sendbuf, 2, {
                         ptls_buffer_push_block(sendbuf, 2, {
                             if (mode == ENCODE_CH_MODE_OUTER) {
-                                if ((ret = ptls_buffer_reserve(sendbuf, psk_identity.len)) != 0)
+                                if ((ret = ptls_buffer_reserve(sendbuf, psk_identity.len, 1)) != 0)
                                     goto Exit;
                                 ctx->random_bytes(sendbuf->base + sendbuf->off, psk_identity.len);
                                 sendbuf->off += psk_identity.len;
@@ -2336,7 +2351,7 @@ static int encode_client_hello(ptls_context_t *ctx, ptls_buffer_t *sendbuf, enum
                      * requirement of ClientHelloOuter), and later gets filled with the correct binder value if necessary. */
                     ptls_buffer_push_block(sendbuf, 2, {
                         ptls_buffer_push_block(sendbuf, 1, {
-                            if ((ret = ptls_buffer_reserve(sendbuf, psk_binder_size)) != 0)
+                            if ((ret = ptls_buffer_reserve(sendbuf, psk_binder_size, 1)) != 0)
                                 goto Exit;
                             ctx->random_bytes(sendbuf->base + sendbuf->off, psk_binder_size);
                             sendbuf->off += psk_binder_size;
@@ -2366,7 +2381,7 @@ static int send_client_hello(ptls_t *tls, ptls_message_emitter_t *emitter, ptls_
     ptls_buffer_t encoded_ch_inner;
     int ret, is_second_flight = tls->key_schedule != NULL;
 
-    ptls_buffer_init(&encoded_ch_inner, "", 0);
+    ptls_buffer_init_tx(&encoded_ch_inner, "", 0);
 
     if (tls->server_name != NULL && !ptls_server_name_is_ipaddr(tls->server_name))
         sni_name = tls->server_name;
@@ -2520,7 +2535,7 @@ static int send_client_hello(ptls_t *tls, ptls_message_emitter_t *emitter, ptls_
             final_len = (final_len + 31) / 32 * 32;
             padding_len = final_len - (encoded_ch_inner.off - PTLS_HANDSHAKE_HEADER_SIZE);
             if (padding_len != 0) {
-                if ((ret = ptls_buffer_reserve(&encoded_ch_inner, padding_len)) != 0)
+                if ((ret = ptls_buffer_reserve(&encoded_ch_inner, padding_len, 1)) != 0)
                     goto Exit;
                 memset(encoded_ch_inner.base + encoded_ch_inner.off, 0, padding_len);
                 encoded_ch_inner.off += padding_len;
@@ -3539,13 +3554,13 @@ static int client_handle_new_session_ticket(ptls_t *tls, ptls_iovec_t message)
 
     /* save the extension, along with the key of myself */
     ptls_buffer_t ticket_buf;
-    ptls_buffer_init(&ticket_buf, "", 0);
+    ptls_buffer_init_rx(&ticket_buf, "", 0);
     ptls_buffer_push64(&ticket_buf, tls->ctx->get_time->cb(tls->ctx->get_time));
     ptls_buffer_push16(&ticket_buf, tls->key_share->id);
     ptls_buffer_push16(&ticket_buf, tls->cipher_suite->id);
     ptls_buffer_push_block(&ticket_buf, 3, { ptls_buffer_pushv(&ticket_buf, src, end - src); });
     ptls_buffer_push_block(&ticket_buf, 2, {
-        if ((ret = ptls_buffer_reserve(&ticket_buf, tls->key_schedule->hashes[0].algo->digest_size)) != 0)
+        if ((ret = ptls_buffer_reserve(&ticket_buf, tls->key_schedule->hashes[0].algo->digest_size, 0)) != 0)
             goto Exit;
         if ((ret = derive_resumption_secret(tls->key_schedule, ticket_buf.base + ticket_buf.off, ticket_nonce)) != 0)
             goto Exit;
@@ -4132,7 +4147,7 @@ static int try_psk_handshake(ptls_t *tls, size_t *psk_index, int *accept_early_d
     uint8_t binder_key[PTLS_MAX_DIGEST_SIZE];
     int ret;
 
-    ptls_buffer_init(&decbuf, "", 0);
+    ptls_buffer_init_rx(&decbuf, "", 0);
 
     for (*psk_index = 0; *psk_index < ch->psk.identities.count; ++*psk_index) {
         ptls_client_hello_psk_identity_t *identity = ch->psk.identities.list + *psk_index;
@@ -4315,7 +4330,7 @@ static int server_handle_hello(ptls_t *tls, ptls_message_emitter_t *emitter, ptl
         ptls_push_message(emitter, NULL, PTLS_HANDSHAKE_TYPE_SERVER_HELLO, {                                                       \
             sh_start_off = emitter->buf->off - PTLS_HANDSHAKE_HEADER_SIZE;                                                         \
             ptls_buffer_push16(emitter->buf, 0x0303 /* legacy version */);                                                         \
-            if ((ret = ptls_buffer_reserve(emitter->buf, PTLS_HELLO_RANDOM_SIZE)) != 0)                                            \
+            if ((ret = ptls_buffer_reserve(emitter->buf, PTLS_HELLO_RANDOM_SIZE, 1)) != 0)                                      \
                 goto Exit;                                                                                                         \
             do {                                                                                                                   \
                 fill_rand                                                                                                          \
@@ -4367,7 +4382,7 @@ static int server_handle_hello(ptls_t *tls, ptls_message_emitter_t *emitter, ptl
     ptls_iovec_t pubkey = {0}, ecdh_secret = {0};
     int accept_early_data = 0, is_second_flight = tls->state == PTLS_STATE_SERVER_EXPECT_SECOND_CLIENT_HELLO, ret;
 
-    ptls_buffer_init(&ech.ch_inner, "", 0);
+    ptls_buffer_init_rx(&ech.ch_inner, "", 0);
 
     if ((ch = malloc(sizeof(*ch))) == NULL) {
         ret = PTLS_ERROR_NO_MEMORY;
@@ -4591,7 +4606,7 @@ static int server_handle_hello(ptls_t *tls, ptls_message_emitter_t *emitter, ptl
                     ptls_buffer_t *sendbuf = emitter->buf;
                     if (ptls_is_ech_handshake(tls, NULL, NULL, NULL)) {
                         buffer_push_extension(sendbuf, PTLS_EXTENSION_TYPE_ENCRYPTED_CLIENT_HELLO, {
-                            if ((ret = ptls_buffer_reserve(sendbuf, PTLS_ECH_CONFIRM_LENGTH)) != 0)
+                            if ((ret = ptls_buffer_reserve(sendbuf, PTLS_ECH_CONFIRM_LENGTH, 1)) != 0)
                                 goto Exit;
                             memset(sendbuf->base + sendbuf->off, 0, PTLS_ECH_CONFIRM_LENGTH);
                             ech_confirm_off = sendbuf->off;
@@ -4607,7 +4622,7 @@ static int server_handle_hello(ptls_t *tls, ptls_message_emitter_t *emitter, ptl
                                     /* first block of the cookie data is the hash(ch1) */
                                     ptls_buffer_push_block(sendbuf, 1, {
                                         size_t sz = tls->cipher_suite->hash->digest_size;
-                                        if ((ret = ptls_buffer_reserve(sendbuf, sz)) != 0)
+                                        if ((ret = ptls_buffer_reserve(sendbuf, sz, 1)) != 0)
                                             goto Exit;
                                         key_schedule_extract_ch1hash(tls->key_schedule, sendbuf->base + sendbuf->off);
                                         sendbuf->off += sz;
@@ -4620,7 +4635,7 @@ static int server_handle_hello(ptls_t *tls, ptls_message_emitter_t *emitter, ptl
                                 /* push the signature */
                                 ptls_buffer_push_block(sendbuf, 1, {
                                     size_t sz = tls->ctx->cipher_suites[0]->hash->digest_size;
-                                    if ((ret = ptls_buffer_reserve(sendbuf, sz)) != 0)
+                                    if ((ret = ptls_buffer_reserve(sendbuf, sz, 1)) != 0)
                                         goto Exit;
                                     if ((ret = calc_cookie_signature(tls, properties, negotiated_group,
                                                                      ptls_iovec_init(sendbuf->base + tbs_start, tbs_len),
@@ -5092,8 +5107,8 @@ static int parse_record(ptls_t *tls, struct st_ptls_record_t *rec, const uint8_t
     *rec = (struct st_ptls_record_t){0};
 
     if (tls->recvbuf.rec.base == NULL) {
-        ptls_buffer_init(&tls->recvbuf.rec, "", 0);
-        if ((ret = ptls_buffer_reserve(&tls->recvbuf.rec, 5)) != 0)
+        ptls_buffer_init_rx(&tls->recvbuf.rec, "", 0);
+        if ((ret = ptls_buffer_reserve(&tls->recvbuf.rec, 5, 0)) != 0)
             return ret;
     }
 
@@ -5109,7 +5124,7 @@ static int parse_record(ptls_t *tls, struct st_ptls_record_t *rec, const uint8_t
     /* fill the fragment */
     size_t addlen = rec->length + 5 - tls->recvbuf.rec.off;
     if (addlen != 0) {
-        if ((ret = ptls_buffer_reserve(&tls->recvbuf.rec, addlen)) != 0)
+        if ((ret = ptls_buffer_reserve(&tls->recvbuf.rec, addlen, 0)) != 0)
             return ret;
         if (addlen > (size_t)(end - src))
             addlen = end - src;
@@ -5258,6 +5273,8 @@ int ptls_build_tls12_export_params(ptls_context_t *ctx, ptls_buffer_t *output, i
     int ret;
 
     assert(key_block_len <= sizeof(key_block));
+    if ((ret = buffer_require_direction(output, 1)) != 0)
+        return ret;
 
     /* generate key block */
     if ((ret =
@@ -5292,6 +5309,8 @@ int ptls_export(ptls_t *tls, ptls_buffer_t *output)
     ptls_iovec_t negotiated_protocol =
         ptls_iovec_init(tls->negotiated_protocol, tls->negotiated_protocol != NULL ? strlen(tls->negotiated_protocol) : 0);
     int ret;
+    if ((ret = buffer_require_direction(output, 1)) != 0)
+        return ret;
 
     if (tls->state != PTLS_STATE_SERVER_POST_HANDSHAKE) {
         ret = PTLS_ERROR_LIBRARY;
@@ -5820,7 +5839,7 @@ static int handle_handshake_record(ptls_t *tls,
     } else {
         if (message_buffer_is_overflow(tls->ctx, tls->recvbuf.mess.off + rec->length))
             return PTLS_ALERT_HANDSHAKE_FAILURE;
-        if ((ret = ptls_buffer_reserve(&tls->recvbuf.mess, rec->length)) != 0)
+        if ((ret = ptls_buffer_reserve(&tls->recvbuf.mess, rec->length, 0)) != 0)
             return ret;
         memcpy(tls->recvbuf.mess.base + tls->recvbuf.mess.off, rec->fragment, rec->length);
         tls->recvbuf.mess.off += rec->length;
@@ -5853,8 +5872,8 @@ static int handle_handshake_record(ptls_t *tls,
         if (message_buffer_is_overflow(tls->ctx, new_size))
             return PTLS_ALERT_HANDSHAKE_FAILURE;
         if (tls->recvbuf.mess.base == NULL) {
-            ptls_buffer_init(&tls->recvbuf.mess, "", 0);
-            if ((ret = ptls_buffer_reserve(&tls->recvbuf.mess, new_size)) != 0)
+            ptls_buffer_init_rx(&tls->recvbuf.mess, "", 0);
+            if ((ret = ptls_buffer_reserve(&tls->recvbuf.mess, new_size, 0)) != 0)
                 return ret;
             memcpy(tls->recvbuf.mess.base, src, new_size);
         } else {
@@ -5895,7 +5914,7 @@ static int handle_input(ptls_t *tls, ptls_message_emitter_t *emitter, ptls_buffe
         size_t decrypted_length;
         if (rec.type != PTLS_CONTENT_TYPE_APPDATA)
             return PTLS_ALERT_HANDSHAKE_FAILURE;
-        if ((ret = ptls_buffer_reserve(decryptbuf, 5 + rec.length)) != 0)
+        if ((ret = ptls_buffer_reserve(decryptbuf, 5 + rec.length, 0)) != 0)
             return ret;
         if ((ret = aead_decrypt(&tls->traffic_protection.dec, decryptbuf->base + decryptbuf->off, &decrypted_length, rec.fragment,
                                 rec.length)) != 0) {
@@ -5991,7 +6010,7 @@ static int handle_input_tls12(ptls_t *tls, ptls_buffer_t *decryptbuf, const void
     build_tls12_aad(aad, rec.type, tls->traffic_protection.dec.seq, (uint16_t)textlen);
 
     /* decrypt input to decryptbuf */
-    if ((ret = ptls_buffer_reserve(decryptbuf, textlen)) != 0)
+    if ((ret = ptls_buffer_reserve(decryptbuf, textlen, 0)) != 0)
         goto Exit;
     if (ptls_aead_decrypt(tls->traffic_protection.dec.aead, decryptbuf->base + decryptbuf->off, src, end - src, nonce, aad,
                           sizeof(aad)) != textlen) {
@@ -6034,6 +6053,8 @@ int ptls_handshake(ptls_t *tls, ptls_buffer_t *_sendbuf, const void *input, size
 
     assert(tls->state < PTLS_STATE_POST_HANDSHAKE_MIN);
 
+    if ((ret = buffer_require_direction(_sendbuf, 1)) != 0)
+        return ret;
     init_record_message_emitter(tls, &emitter, _sendbuf);
     size_t sendbuf_orig_off = emitter.super.buf->off;
 
@@ -6052,7 +6073,7 @@ int ptls_handshake(ptls_t *tls, ptls_buffer_t *_sendbuf, const void *input, size
     const uint8_t *src = input, *const src_end = src + *inlen;
     ptls_buffer_t decryptbuf;
 
-    ptls_buffer_init(&decryptbuf, "", 0);
+    ptls_buffer_init_rx(&decryptbuf, "", 0);
 
     /* perform handhake until completion or until all the input has been swallowed */
     ret = PTLS_ERROR_IN_PROGRESS;
@@ -6094,9 +6115,12 @@ int ptls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, const void *_input, siz
 {
     const uint8_t *input = (const uint8_t *)_input, *const end = input + *inlen;
     size_t decryptbuf_orig_size = decryptbuf->off;
-    int ret = 0;
+    int ret;
 
     assert(tls->state >= PTLS_STATE_SERVER_EXPECT_END_OF_EARLY_DATA);
+    if ((ret = buffer_require_direction(decryptbuf, 0)) != 0)
+        return ret;
+    ret = 0;
 
     /* loop until we decrypt some application data (or an error) */
     while (ret == 0 && input != end && decryptbuf_orig_size == decryptbuf->off) {
@@ -6152,7 +6176,11 @@ Exit:
 
 int ptls_send(ptls_t *tls, ptls_buffer_t *sendbuf, const void *input, size_t inlen)
 {
+    int ret;
+
     assert(tls->traffic_protection.enc.aead != NULL);
+    if ((ret = buffer_require_direction(sendbuf, 1)) != 0)
+        return ret;
 
     /* "For AES-GCM, up to 2^24.5 full-size records (about 24 million) may be encrypted on a given connection while keeping a
      * safety margin of approximately 2^-57 for Authenticated Encryption (AE) security." (RFC 8446 section 5.5).
@@ -6197,6 +6225,8 @@ int ptls_send_alert(ptls_t *tls, ptls_buffer_t *sendbuf, uint8_t level, uint8_t 
     size_t rec_start = sendbuf->off;
     int ret = 0;
 
+    if ((ret = buffer_require_direction(sendbuf, 1)) != 0)
+        return ret;
     buffer_push_record(sendbuf, PTLS_CONTENT_TYPE_ALERT, { ptls_buffer_push(sendbuf, level, description); });
     /* encrypt the alert if we have the encryption keys, unless when it is the early data key */
     if (tls->traffic_protection.enc.aead != NULL && !(tls->state <= PTLS_STATE_CLIENT_EXPECT_FINISHED)) {
@@ -6384,7 +6414,7 @@ int ptls_hkdf_expand_label(ptls_hash_algorithm_t *algo, void *output, size_t out
     uint8_t hkdf_label_buf[80];
     int ret;
 
-    ptls_buffer_init(&hkdf_label, hkdf_label_buf, sizeof(hkdf_label_buf));
+    ptls_buffer_init_tx(&hkdf_label, hkdf_label_buf, sizeof(hkdf_label_buf));
 
     ptls_buffer_push16(&hkdf_label, (uint16_t)outlen);
     ptls_buffer_push_block(&hkdf_label, 1, {
@@ -6647,7 +6677,11 @@ int ptls_handle_message(ptls_t *tls, ptls_buffer_t *sendbuf, size_t epoch_offset
 int ptls_client_handle_message(ptls_t *tls, ptls_buffer_t *sendbuf, size_t epoch_offsets[5], size_t in_epoch, const void *input,
                                size_t inlen, ptls_handshake_properties_t *properties)
 {
+    int ret;
+
     assert(!tls->is_server);
+    if ((ret = buffer_require_direction(sendbuf, 1)) != 0)
+        return ret;
 
     struct st_ptls_raw_message_emitter_t emitter = {
         {sendbuf, &tls->traffic_protection.enc, 0, begin_raw_message, commit_raw_message}, SIZE_MAX, epoch_offsets};
@@ -6665,7 +6699,11 @@ int ptls_client_handle_message(ptls_t *tls, ptls_buffer_t *sendbuf, size_t epoch
 int ptls_server_handle_message(ptls_t *tls, ptls_buffer_t *sendbuf, size_t epoch_offsets[5], size_t in_epoch, const void *input,
                                size_t inlen, ptls_handshake_properties_t *properties)
 {
+    int ret;
+
     assert(tls->is_server);
+    if ((ret = buffer_require_direction(sendbuf, 1)) != 0)
+        return ret;
 
     struct st_ptls_raw_message_emitter_t emitter = {
         {sendbuf, &tls->traffic_protection.enc, 0, begin_raw_message, commit_raw_message}, SIZE_MAX, epoch_offsets};
@@ -6706,6 +6744,8 @@ int ptls_ech_encode_config(ptls_buffer_t *buf, uint8_t config_id, ptls_hpke_kem_
                            ptls_hpke_cipher_suite_t **ciphers, uint8_t max_name_length, const char *public_name)
 {
     int ret;
+    if ((ret = buffer_require_direction(buf, 1)) != 0)
+        return ret;
 
     ptls_buffer_push16(buf, PTLS_ECH_CONFIG_VERSION);
     ptls_buffer_push_block(buf, 2, {
@@ -6969,7 +7009,7 @@ static int expand_logbuf_or_invalidate(const char *prefix, size_t prefix_len, si
     if (logbuf.buf.base == NULL)
         return 0;
 
-    if (ptls_buffer_reserve(&logbuf.buf, prefix_len + capacity) != 0) {
+    if (ptls_buffer_reserve(&logbuf.buf, prefix_len + capacity, 1) != 0) {
         ptls_buffer_dispose(&logbuf.buf);
         assert(logbuf.buf.base == NULL);
         return 0;
@@ -7061,7 +7101,7 @@ void ptls_log__do_push_element_bool(const char *prefix, size_t prefix_len, int v
 void ptls_log__do_write_start(struct st_ptls_log_point_t *point, int add_time)
 {
     assert(logbuf.buf.base == NULL);
-    ptls_buffer_init(&logbuf.buf, logbuf.smallbuf, sizeof(logbuf.smallbuf));
+    ptls_buffer_init_tx(&logbuf.buf, logbuf.smallbuf, sizeof(logbuf.smallbuf));
 
     /* add module and type name */
     const char *colon_at = strchr(point->name, ':');

@@ -41,6 +41,8 @@ static size_t buffer_alloc_last_len;
 static size_t buffer_free_last_len;
 static uint8_t buffer_alloc_last_align_bits;
 static uint8_t buffer_free_last_align_bits;
+static int buffer_alloc_last_tx;
+static int buffer_free_last_tx;
 static void *buffer_alloc_last_orig;
 static void *buffer_alloc_last_ptr;
 static void *buffer_free_last_ptr;
@@ -54,19 +56,22 @@ static void reset_buffer_alloc_tracking(void)
     buffer_free_last_len = 0;
     buffer_alloc_last_align_bits = 0;
     buffer_free_last_align_bits = 0;
+    buffer_alloc_last_tx = -1;
+    buffer_free_last_tx = -1;
     buffer_alloc_last_orig = NULL;
     buffer_alloc_last_ptr = NULL;
     buffer_free_last_ptr = NULL;
     buffer_alloc_fail_on_call = 0;
 }
 
-static void test_buffer_free(ptls_buffer_t *buf);
+static void test_buffer_free(ptls_buffer_t *buf, int tx);
 
-static void *test_buffer_alloc(ptls_buffer_t *buf, uint32_t new_capacity, uint8_t align_bits)
+static void *test_buffer_alloc(ptls_buffer_t *buf, uint32_t new_capacity, uint8_t align_bits, int tx)
 {
     ++buffer_alloc_calls;
     buffer_alloc_last_len = new_capacity;
     buffer_alloc_last_align_bits = align_bits;
+    buffer_alloc_last_tx = tx;
     buffer_alloc_last_orig = buf->base;
     if (buffer_alloc_fail_on_call != 0 && buffer_alloc_calls >= buffer_alloc_fail_on_call)
         return NULL;
@@ -81,20 +86,22 @@ static void *test_buffer_alloc(ptls_buffer_t *buf, uint32_t new_capacity, uint8_
     if (buf->off) memcpy((void *)aligned, buf->base, buf->off);
     ptls_clear_memory(buf->base, buf->off);
     if (buf->is_allocated)
-        test_buffer_free(buf);
+        test_buffer_free(buf, buf->tx);
     buf->base = (void *)aligned;
     buf->capacity = new_capacity;
     buf->is_allocated = 1;
     buf->align_bits = align_bits;
+    buf->tx = tx;
     buffer_alloc_last_ptr = (void *)aligned;
     return (void *)aligned;
 }
 
-static void test_buffer_free(ptls_buffer_t *buf)
+static void test_buffer_free(ptls_buffer_t *buf, int tx)
 {
     ++buffer_free_calls;
     buffer_free_last_len = buf->capacity;
     buffer_free_last_align_bits = buf->align_bits;
+    buffer_free_last_tx = tx;
     buffer_free_last_ptr = buf->base;
     if (buf->base == NULL)
         return;
@@ -118,11 +125,12 @@ static void test_buffer_alloc_basic(void)
     reset_buffer_alloc_tracking();
     ptls_buffer_t buf;
     uint8_t smallbuf[8];
-    ptls_buffer_init(&buf, smallbuf, sizeof(smallbuf));
+    ptls_buffer_init_rx(&buf, smallbuf, sizeof(smallbuf));
     uint8_t *base = buf.base;
-    ok(ptls_buffer_reserve(&buf, sizeof(smallbuf) + 1) == 0);
+    ok(ptls_buffer_reserve(&buf, sizeof(smallbuf) + 1, 0) == 0);
     ok(buffer_alloc_calls == 1);
     ok(buffer_alloc_last_align_bits == 0);
+    ok(buffer_alloc_last_tx == 0);
     ok(buffer_alloc_last_len >= 1024);
     ok(buffer_alloc_last_orig == base);
     ok(buf.is_allocated != 0);
@@ -132,6 +140,7 @@ static void test_buffer_alloc_basic(void)
     ok(buffer_free_calls == 1);
     ok(buffer_free_last_len == cap);
     ok(buffer_free_last_align_bits == 0);
+    ok(buffer_free_last_tx == 0);
     ok(buffer_free_last_ptr == buffer_alloc_last_ptr);
 }
 
@@ -140,10 +149,11 @@ static void test_buffer_alloc_aligned(void)
     reset_buffer_alloc_tracking();
     ptls_buffer_t buf;
     uint8_t smallbuf[8];
-    ptls_buffer_init(&buf, smallbuf, sizeof(smallbuf));
-    ok(ptls_buffer_reserve_aligned(&buf, sizeof(smallbuf) + 1, 6) == 0);
+    ptls_buffer_init_rx(&buf, smallbuf, sizeof(smallbuf));
+    ok(ptls_buffer_reserve_aligned(&buf, sizeof(smallbuf) + 1, 6, 0) == 0);
     ok(buffer_alloc_calls == 1);
     ok(buffer_alloc_last_align_bits == 6);
+    ok(buffer_alloc_last_tx == 0);
     ok(((uintptr_t)buf.base & 63) == 0);
     ok(buf.align_bits == 6);
     size_t cap = buf.capacity;
@@ -151,6 +161,7 @@ static void test_buffer_alloc_aligned(void)
     ok(buffer_free_calls == 1);
     ok(buffer_free_last_len == cap);
     ok(buffer_free_last_align_bits == 6);
+    ok(buffer_free_last_tx == 0);
 }
 
 static void test_buffer_alloc_failure(void)
@@ -159,18 +170,92 @@ static void test_buffer_alloc_failure(void)
     buffer_alloc_fail_on_call = 1;
     ptls_buffer_t buf;
     uint8_t smallbuf[8];
-    ptls_buffer_init(&buf, smallbuf, sizeof(smallbuf));
+    ptls_buffer_init_rx(&buf, smallbuf, sizeof(smallbuf));
     size_t cap = buf.capacity;
     size_t off = buf.off;
     uint8_t *base = buf.base;
-    ok(ptls_buffer_reserve_aligned(&buf, sizeof(smallbuf) + 1, 6) == PTLS_ERROR_NO_MEMORY);
+    ok(ptls_buffer_reserve_aligned(&buf, sizeof(smallbuf) + 1, 6, 0) == PTLS_ERROR_NO_MEMORY);
     ok(buffer_alloc_last_orig == base);
+    ok(buffer_alloc_last_tx == 0);
     ok(buf.base == base);
     ok(buf.capacity == cap);
     ok(buf.off == off);
     ok(buf.is_allocated == 0);
     ok(buffer_free_calls == 0);
     ptls_buffer_dispose(&buf);
+}
+
+static void test_buffer_alloc_direction_tx(void)
+{
+    ptls_t *client = ptls_new(ctx, 0);
+    ptls_buffer_t sendbuf;
+    uint8_t sendbuf_small[8];
+    int ret;
+    size_t cap, free_calls;
+
+    reset_buffer_alloc_tracking();
+    ptls_buffer_init_tx(&sendbuf, sendbuf_small, sizeof(sendbuf_small));
+    ret = ptls_handshake(client, &sendbuf, NULL, NULL, NULL);
+    ok(ret == PTLS_ERROR_IN_PROGRESS);
+    ok(buffer_alloc_calls != 0);
+    ok(buffer_alloc_last_tx == 1);
+    cap = sendbuf.capacity;
+    free_calls = buffer_free_calls;
+
+    ptls_buffer_dispose(&sendbuf);
+    ok(buffer_free_calls == free_calls + 1);
+    ok(buffer_free_last_len == cap);
+    ok(buffer_free_last_tx == 1);
+    ptls_free(client);
+}
+
+static void test_buffer_alloc_direction_rx(void)
+{
+    ptls_t *client = ptls_new(ctx, 0), *server = ptls_new(ctx_peer, 1);
+    ptls_buffer_t cbuf, sbuf, decbuf;
+    uint8_t cbuf_small[16384], sbuf_small[16384], decbuf_small[8];
+    size_t consumed;
+    size_t cap, free_calls;
+    int ret;
+
+    ptls_buffer_init_tx(&cbuf, cbuf_small, sizeof(cbuf_small));
+    ptls_buffer_init_tx(&sbuf, sbuf_small, sizeof(sbuf_small));
+    ptls_buffer_init_rx(&decbuf, decbuf_small, sizeof(decbuf_small));
+
+    ret = ptls_handshake(client, &cbuf, NULL, NULL, NULL);
+    ok(ret == PTLS_ERROR_IN_PROGRESS);
+    consumed = cbuf.off;
+    ret = ptls_handshake(server, &sbuf, cbuf.base, &consumed, NULL);
+    ok(ret == PTLS_ERROR_IN_PROGRESS || ret == 0);
+    ok(consumed == cbuf.off);
+    cbuf.off = 0;
+    consumed = sbuf.off;
+    ret = ptls_handshake(client, &cbuf, sbuf.base, &consumed, NULL);
+    ok(ret == 0);
+    ok(consumed == sbuf.off);
+    sbuf.off = 0;
+
+    ret = ptls_send(client, &cbuf, "hello world", 11);
+    ok(ret == 0);
+
+    reset_buffer_alloc_tracking();
+    consumed = cbuf.off;
+    ret = ptls_receive(server, &decbuf, cbuf.base, &consumed);
+    ok(ret == 0);
+    ok(consumed == cbuf.off);
+    ok(buffer_alloc_calls != 0);
+    ok(buffer_alloc_last_tx == 0);
+    cap = decbuf.capacity;
+    free_calls = buffer_free_calls;
+
+    ptls_buffer_dispose(&decbuf);
+    ok(buffer_free_calls == free_calls + 1);
+    ok(buffer_free_last_len == cap);
+    ok(buffer_free_last_tx == 0);
+    ptls_buffer_dispose(&sbuf);
+    ptls_buffer_dispose(&cbuf);
+    ptls_free(server);
+    ptls_free(client);
 }
 
 static void test_extension_bitmap(void)
@@ -187,8 +272,8 @@ static void test_extension_bitmap(void)
 
 static void test_buffer_alloc_overrides(void)
 {
-    void *(*saved_alloc)(ptls_buffer_t *, uint32_t, uint8_t) = ptls_buffer_alloc;
-    void (*saved_free)(ptls_buffer_t *) = ptls_buffer_free;
+    void *(*saved_alloc)(ptls_buffer_t *, uint32_t, uint8_t, int) = ptls_buffer_alloc;
+    void (*saved_free)(ptls_buffer_t *, int) = ptls_buffer_free;
 
     ptls_buffer_alloc = test_buffer_alloc;
     ptls_buffer_free = test_buffer_free;
@@ -196,6 +281,8 @@ static void test_buffer_alloc_overrides(void)
     subtest("basic-alloc-free", test_buffer_alloc_basic);
     subtest("aligned-alloc", test_buffer_alloc_aligned);
     subtest("alloc-failure", test_buffer_alloc_failure);
+    subtest("direction-tx", test_buffer_alloc_direction_tx);
+    subtest("direction-rx", test_buffer_alloc_direction_rx);
 
     ptls_buffer_alloc = saved_alloc;
     ptls_buffer_free = saved_free;
@@ -754,7 +841,7 @@ static void test_base64_decode(void)
     ptls_buffer_t buf;
     int ret;
 
-    ptls_buffer_init(&buf, "", 0);
+    ptls_buffer_init_tx(&buf, "", 0);
 
     ptls_base64_decode_init(&state);
     ret = ptls_base64_decode("aGVsbG8gd29ybGQ=", &state, &buf);
@@ -811,7 +898,7 @@ static void test_ech_decode_config(void)
 static void test_rebuild_ch_inner(void)
 {
     ptls_buffer_t buf;
-    ptls_buffer_init(&buf, "", 0);
+    ptls_buffer_init_tx(&buf, "", 0);
 
 #define TEST(_expected_err)                                                                                                        \
     do {                                                                                                                           \
@@ -1039,7 +1126,7 @@ static ptls_t *clone_tls(ptls_t *src)
     ptls_t *dest = NULL;
     ptls_buffer_t sess_data;
 
-    ptls_buffer_init(&sess_data, "", 0);
+    ptls_buffer_init_tx(&sess_data, "", 0);
     int r = ptls_export(src, &sess_data);
     assert(r == 0);
     r = ptls_import(ctx_peer, &dest, (ptls_iovec_t){.base = sess_data.base, .len = sess_data.off});
@@ -1072,9 +1159,9 @@ static void test_handshake(ptls_iovec_t ticket, int mode, int expect_ticket, int
 
     client = ptls_new(ctx, 0);
     server = ptls_new(ctx_peer, 1);
-    ptls_buffer_init(&cbuf, cbuf_small, sizeof(cbuf_small));
-    ptls_buffer_init(&sbuf, sbuf_small, sizeof(sbuf_small));
-    ptls_buffer_init(&decbuf, decbuf_small, sizeof(decbuf_small));
+    ptls_buffer_init_tx(&cbuf, cbuf_small, sizeof(cbuf_small));
+    ptls_buffer_init_tx(&sbuf, sbuf_small, sizeof(sbuf_small));
+    ptls_buffer_init_rx(&decbuf, decbuf_small, sizeof(decbuf_small));
 
     if (check_ch) {
         static ptls_on_client_hello_t cb = {save_client_hello};
@@ -1365,7 +1452,7 @@ static int async_sign_certificate(ptls_sign_certificate_t *self, ptls_t *tls, pt
         if (*async == NULL) {
             /* first invocation, make a fake call to the backend and obtain the algorithm, return it, but not the signature */
             ptls_buffer_t fakebuf;
-            ptls_buffer_init(&fakebuf, "", 0);
+            ptls_buffer_init_tx(&fakebuf, "", 0);
             int ret = sign_certificate(self, tls, NULL, selected_algorithm, &fakebuf, input, algorithms, num_algorithms);
             assert(ret == 0);
             ptls_buffer_dispose(&fakebuf);
@@ -1451,7 +1538,7 @@ static int on_copy_ticket(ptls_encrypt_ticket_t *self, ptls_t *tls, int is_encry
 {
     int ret;
 
-    if ((ret = ptls_buffer_reserve(dst, src.len)) != 0)
+    if ((ret = ptls_buffer_reserve(dst, src.len, dst->tx)) != 0)
         return ret;
     memcpy(dst->base + dst->off, src.base, src.len);
     dst->off += src.len;
@@ -1581,9 +1668,9 @@ static void test_enforce_retry(int use_cookie)
     server_hs_prop.server.enforce_retry = 1;
     server_hs_prop.server.retry_uses_cookie = use_cookie;
 
-    ptls_buffer_init(&cbuf, "", 0);
-    ptls_buffer_init(&sbuf, "", 0);
-    ptls_buffer_init(&decbuf, "", 0);
+    ptls_buffer_init_tx(&cbuf, "", 0);
+    ptls_buffer_init_tx(&sbuf, "", 0);
+    ptls_buffer_init_rx(&decbuf, "", 0);
 
     client = ptls_new(ctx, 0);
 
@@ -1661,8 +1748,8 @@ static ptls_t *stateless_hrr_prepare(ptls_buffer_t *sbuf, ptls_handshake_propert
     size_t consumed;
     int ret;
 
-    ptls_buffer_init(&cbuf, "", 0);
-    ptls_buffer_init(sbuf, "", 0);
+    ptls_buffer_init_tx(&cbuf, "", 0);
+    ptls_buffer_init_tx(sbuf, "", 0);
 
     ret = ptls_handshake(client, &cbuf, NULL, NULL, NULL);
     ok(ret == PTLS_ERROR_IN_PROGRESS);
@@ -1691,7 +1778,7 @@ static void test_stateless_hrr_aad_change(void)
     server_hs_prop.server.retry_uses_cookie = 1;
 
     client = stateless_hrr_prepare(&sbuf, &server_hs_prop);
-    ptls_buffer_init(&cbuf, "", 0);
+    ptls_buffer_init_tx(&cbuf, "", 0);
 
     consumed = sbuf.off;
     ret = ptls_handshake(client, &cbuf, sbuf.base, &consumed, NULL);
@@ -1729,9 +1816,9 @@ static void test_ech_config_mismatch(void)
     client = ptls_new(ctx, 0);
     ptls_set_server_name(client, "test.example.com", 0);
     server = ptls_new(ctx_peer, 1);
-    ptls_buffer_init(&cbuf, "", 0);
-    ptls_buffer_init(&sbuf, "", 0);
-    ptls_buffer_init(&decryptbuf, "", 0);
+    ptls_buffer_init_tx(&cbuf, "", 0);
+    ptls_buffer_init_tx(&sbuf, "", 0);
+    ptls_buffer_init_rx(&decryptbuf, "", 0);
 
     ret = ptls_handshake(client, &cbuf, NULL, NULL, &client_hs_prop);
     ok(ret == PTLS_ERROR_IN_PROGRESS);
@@ -1831,9 +1918,9 @@ static void do_test_pre_shared_key(int mode)
 
     ptls_t *client = ptls_new(&ctx_client, 0), *server = ptls_new(&ctx_server, 1);
     ptls_buffer_t cbuf, sbuf, decbuf;
-    ptls_buffer_init(&cbuf, "", 0);
-    ptls_buffer_init(&sbuf, "", 0);
-    ptls_buffer_init(&decbuf, "", 0);
+    ptls_buffer_init_tx(&cbuf, "", 0);
+    ptls_buffer_init_tx(&sbuf, "", 0);
+    ptls_buffer_init_rx(&decbuf, "", 0);
 
     /* [client] send CH and early data */
     int ret = ptls_handshake(client, &cbuf, NULL, NULL, &client_prop);
@@ -1997,8 +2084,8 @@ static void test_handshake_api(void)
 
     memset(saved_tickets, 0, sizeof(saved_tickets));
 
-    ptls_buffer_init(&cbuf, "", 0);
-    ptls_buffer_init(&sbuf, "", 0);
+    ptls_buffer_init_tx(&cbuf, "", 0);
+    ptls_buffer_init_tx(&sbuf, "", 0);
 
     client = ptls_new(ctx, 0);
     *ptls_get_data_ptr(client) = &client_secrets;
@@ -2298,7 +2385,7 @@ static void do_test_tlsblock(size_t len_encoded, size_t max_bytes)
     int expect_overflow = 0, ret;
 
     /* block that fits in */
-    ptls_buffer_init(&buf, "", 0);
+    ptls_buffer_init_tx(&buf, "", 0);
     ptls_buffer_push_block(&buf, len_encoded, {
         for (size_t i = 0; i < max_bytes; ++i)
             ptls_buffer_push(&buf, (uint8_t)i);
@@ -2389,9 +2476,9 @@ static void test_quicblock(void)
 {
     ptls_buffer_t buf;
     const uint8_t *src, *end;
-    int ret;
+    int ret = 0;
 
-    ptls_buffer_init(&buf, "", 0);
+    ptls_buffer_init_tx(&buf, "", 0);
 
     ptls_buffer_push_block(&buf, 1, { ptls_buffer_pushv(&buf, "abc", 3); });
     src = buf.base;
@@ -2403,12 +2490,11 @@ static void test_quicblock(void)
     });
 
     buf.off = 0;
-    ptls_buffer_push_block(&buf, 1, {
-        if ((ret = ptls_buffer_reserve(&buf, 123)) != 0)
-            goto Exit;
-        memset(buf.base + buf.off, 0x55, 123);
-        buf.off += 123;
-    });
+    ptls_buffer_push_quicint(&buf, 123);
+    if ((ret = ptls_buffer_reserve(&buf, 123, buf.tx)) != 0)
+        goto Exit;
+    memset(buf.base + buf.off, 0x55, 123);
+    buf.off += 123;
     src = buf.base;
     end = buf.base + buf.off;
     ptls_decode_block(src, end, -1, {
@@ -2492,7 +2578,7 @@ static void test_legacy_ch(void)
     ctx->on_client_hello = &on_client_hello;
 
     ptls_buffer_t sendbuf;
-    ptls_buffer_init(&sendbuf, "", 0);
+    ptls_buffer_init_tx(&sendbuf, "", 0);
 
     ptls_t *tls = ptls_new(ctx, 1);
     size_t len = sizeof(tls12);

@@ -226,7 +226,7 @@ static int encrypt_ticket_cb(ptls_encrypt_ticket_t *_self, ptls_t *tls, int is_e
         self->data.len = src.len;
 
         /* store the session id in buffer */
-        if ((ret = ptls_buffer_reserve(dst, sizeof(self->id))) != 0)
+        if ((ret = ptls_buffer_reserve(dst, sizeof(self->id), dst->tx)) != 0)
             return ret;
         memcpy(dst->base + dst->off, self->id, sizeof(self->id));
         dst->off += sizeof(self->id);
@@ -240,7 +240,7 @@ static int encrypt_ticket_cb(ptls_encrypt_ticket_t *_self, ptls_t *tls, int is_e
             return PTLS_ERROR_SESSION_NOT_FOUND;
 
         /* return the cached value */
-        if ((ret = ptls_buffer_reserve(dst, self->data.len)) != 0)
+        if ((ret = ptls_buffer_reserve(dst, self->data.len, dst->tx)) != 0)
             return ret;
         memcpy(dst->base + dst->off, self->data.base, self->data.len);
         dst->off += self->data.len;

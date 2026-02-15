@@ -51,7 +51,7 @@ static int labeled_extract(ptls_hpke_kem_t *kem, ptls_hpke_cipher_suite_t *ciphe
     uint8_t labeled_ikm_smallbuf[64];
     int ret;
 
-    ptls_buffer_init(&labeled_ikm, labeled_ikm_smallbuf, sizeof(labeled_ikm_smallbuf));
+    ptls_buffer_init_tx(&labeled_ikm, labeled_ikm_smallbuf, sizeof(labeled_ikm_smallbuf));
 
     ptls_buffer_pushv(&labeled_ikm, HPKE_V1_LABEL, strlen(HPKE_V1_LABEL));
     if ((ret = build_suite_id(&labeled_ikm, kem, cipher)) != 0)
@@ -76,7 +76,7 @@ static int labeled_expand(ptls_hpke_kem_t *kem, ptls_hpke_cipher_suite_t *cipher
 
     assert(outlen < UINT16_MAX);
 
-    ptls_buffer_init(&labeled_info, labeled_info_smallbuf, sizeof(labeled_info_smallbuf));
+    ptls_buffer_init_tx(&labeled_info, labeled_info_smallbuf, sizeof(labeled_info_smallbuf));
 
     ptls_buffer_push16(&labeled_info, (uint16_t)outlen);
     ptls_buffer_pushv(&labeled_info, HPKE_V1_LABEL, strlen(HPKE_V1_LABEL));
@@ -100,7 +100,7 @@ static int extract_and_expand(ptls_hpke_kem_t *kem, void *secret, size_t secret_
     uint8_t kem_context_smallbuf[128], eae_prk[PTLS_MAX_DIGEST_SIZE];
     int ret;
 
-    ptls_buffer_init(&kem_context, kem_context_smallbuf, sizeof(kem_context_smallbuf));
+    ptls_buffer_init_tx(&kem_context, kem_context_smallbuf, sizeof(kem_context_smallbuf));
 
     ptls_buffer_pushv(&kem_context, pk_s.base, pk_s.len);
     ptls_buffer_pushv(&kem_context, pk_r.base, pk_r.len);
@@ -183,16 +183,16 @@ static int key_schedule(ptls_hpke_kem_t *kem, ptls_hpke_cipher_suite_t *cipher, 
 
     *ctx = NULL;
 
-    ptls_buffer_init(&key_schedule_context, key_schedule_context_smallbuf, sizeof(key_schedule_context_smallbuf));
+    ptls_buffer_init(&key_schedule_context, key_schedule_context_smallbuf, sizeof(key_schedule_context_smallbuf), is_enc != 0);
 
     /* key_schedule_context = concat(mode, LabeledExtract("", "psk_id_hash", psk_id), LabeledExtract("", "info_hash", info)) */
     ptls_buffer_push(&key_schedule_context, PTLS_HPKE_MODE_BASE);
-    if ((ret = ptls_buffer_reserve(&key_schedule_context, cipher->hash->digest_size)) != 0 ||
+    if ((ret = ptls_buffer_reserve(&key_schedule_context, cipher->hash->digest_size, is_enc != 0)) != 0 ||
         (ret = labeled_extract(kem, cipher, key_schedule_context.base + key_schedule_context.off, ptls_iovec_init(NULL, 0),
                                "psk_id_hash", ptls_iovec_init(NULL, 0))) != 0)
         goto Exit;
     key_schedule_context.off += cipher->hash->digest_size;
-    if ((ret = ptls_buffer_reserve(&key_schedule_context, cipher->hash->digest_size)) != 0 ||
+    if ((ret = ptls_buffer_reserve(&key_schedule_context, cipher->hash->digest_size, is_enc != 0)) != 0 ||
         (ret = labeled_extract(kem, cipher, key_schedule_context.base + key_schedule_context.off, ptls_iovec_init(NULL, 0),
                                "info_hash", info)) != 0)
         goto Exit;

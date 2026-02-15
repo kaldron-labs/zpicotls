@@ -88,7 +88,7 @@ static int build_compressed(struct st_ptls_compressed_certificate_entry_t *entry
     ptls_buffer_t uncompressed;
     int ret;
 
-    ptls_buffer_init(&uncompressed, "", 0);
+    ptls_buffer_init_tx(&uncompressed, "", 0);
 
     /* build uncompressed */
     if ((ret = ptls_build_certificate_message(&uncompressed, ptls_iovec_init(NULL, 0), certificates, num_certificates,

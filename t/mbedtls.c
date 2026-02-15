@@ -168,7 +168,7 @@ int test_load_one_der_key(char const *path)
             num_algorithms++;
         }
 
-        ptls_buffer_init(&outbuf, outbuf_smallbuf, sizeof(outbuf_smallbuf));
+        ptls_buffer_init_tx(&outbuf, outbuf_smallbuf, sizeof(outbuf_smallbuf));
 
         ret = ptls_mbedtls_sign_certificate(ctx.sign_certificate, NULL, NULL, &selected_algorithm, &outbuf, input, algorithms,
                                             num_algorithms);

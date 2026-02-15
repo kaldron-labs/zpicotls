@@ -93,9 +93,9 @@ static int handle_connection(int sockfd, ptls_context_t *ctx, const char *server
 
     uint64_t start_at = ctx->get_time->cb(ctx->get_time);
 
-    ptls_buffer_init(&rbuf, "", 0);
-    ptls_buffer_init(&encbuf, "", 0);
-    ptls_buffer_init(&ptbuf, "", 0);
+    ptls_buffer_init_rx(&rbuf, "", 0);
+    ptls_buffer_init_tx(&encbuf, "", 0);
+    ptls_buffer_init_tx(&ptbuf, "", 0);
 
     if (fcntl(sockfd, F_SETFL, O_NONBLOCK) == -1) {
         perror("fcntl");
@@ -204,7 +204,7 @@ static int handle_connection(int sockfd, ptls_context_t *ctx, const char *server
         if (encbuf.off == 0 || state == IN_HANDSHAKE) {
             static const size_t block_size = 16384;
             if (inputfd >= 0 && (FD_ISSET(inputfd, &readfds) || FD_ISSET(inputfd, &exceptfds))) {
-                if ((ret = ptls_buffer_reserve(&ptbuf, block_size)) != 0)
+                if ((ret = ptls_buffer_reserve(&ptbuf, block_size, ptbuf.tx)) != 0)
                     goto Exit;
                 while ((ioret = read(inputfd, ptbuf.base + ptbuf.off, block_size)) == -1 && errno == EINTR)
                     ;
@@ -218,7 +218,7 @@ static int handle_connection(int sockfd, ptls_context_t *ctx, const char *server
                 }
             } else if (inputfd == inputfd_is_benchmark) {
                 if (ptbuf.capacity < block_size) {
-                    if ((ret = ptls_buffer_reserve(&ptbuf, block_size - ptbuf.capacity)) != 0)
+                    if ((ret = ptls_buffer_reserve(&ptbuf, block_size - ptbuf.capacity, ptbuf.tx)) != 0)
                         goto Exit;
                     memset(ptbuf.base + ptbuf.capacity, 0, block_size - ptbuf.capacity);
                 }
@@ -268,7 +268,7 @@ static int handle_connection(int sockfd, ptls_context_t *ctx, const char *server
             if (!keep_sender_open) {
                 ptls_buffer_t wbuf;
                 uint8_t wbuf_small[32];
-                ptls_buffer_init(&wbuf, wbuf_small, sizeof(wbuf_small));
+                ptls_buffer_init_tx(&wbuf, wbuf_small, sizeof(wbuf_small));
                 if ((ret = ptls_send_alert(tls, &wbuf, PTLS_ALERT_LEVEL_WARNING, PTLS_ALERT_CLOSE_NOTIFY)) != 0) {
                     fprintf(stderr, "ptls_send_alert:%d\n", ret);
                 }

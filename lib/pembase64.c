@@ -319,7 +319,7 @@ int ptls_load_pem_objects(char const *pem_fname, const char *label, ptls_iovec_t
         while (count < list_max) {
             ptls_buffer_t buf;
 
-            ptls_buffer_init(&buf, "", 0);
+            ptls_buffer_init_tx(&buf, "", 0);
 
             ret = ptls_get_pem_object(F, label, &buf);
 

@@ -162,7 +162,7 @@ static void test_sign_verify(EVP_PKEY *key, const ptls_openssl_signature_scheme_
         ptls_buffer_t sigbuf;
         uint8_t sigbuf_small[1024];
 
-        ptls_buffer_init(&sigbuf, sigbuf_small, sizeof(sigbuf_small));
+        ptls_buffer_init_tx(&sigbuf, sigbuf_small, sizeof(sigbuf_small));
         ok(do_sign(key, schemes + i, &sigbuf, ptls_iovec_init(message, strlen(message)), NULL) == 0);
         EVP_PKEY_up_ref(key);
         ok(verify_sign(key, schemes[i].scheme_id, ptls_iovec_init(message, strlen(message)),
@@ -371,7 +371,7 @@ static ptls_aead_context_t *create_ech_opener(ptls_ech_create_opener_t *self, pt
     ptls_buffer_t infobuf;
     int ret;
 
-    ptls_buffer_init(&infobuf, "", 0);
+    ptls_buffer_init_tx(&infobuf, "", 0);
     ptls_buffer_pushv(&infobuf, info_prefix.base, info_prefix.len);
     ptls_buffer_pushv(&infobuf, (const uint8_t *)ECH_CONFIG_LIST + 2,
                       sizeof(ECH_CONFIG_LIST) - 3); /* choose the only ECHConfig from the list */
@@ -421,12 +421,12 @@ static void many_handshakes(void)
     int ret;
 
     { /* generate ClientHello that we would be sent to all the server-side objects */
-        ptls_buffer_init(&clientbuf, "", 0);
+        ptls_buffer_init_tx(&clientbuf, "", 0);
         ret = ptls_handshake(client, &clientbuf, NULL, NULL, NULL);
         ok(ret == PTLS_ERROR_IN_PROGRESS);
     }
 
-    ptls_buffer_init(&resp_sample, "", 0);
+    ptls_buffer_init_tx(&resp_sample, "", 0);
 
     qat.first_pending = 0;
     for (size_t i = 0; i < PTLS_ELEMENTSOF(qat.conns); ++i) {
@@ -457,7 +457,7 @@ static void many_handshakes(void)
             }
             ptls_buffer_t hsbuf;
             uint8_t hsbuf_small[8192];
-            ptls_buffer_init(&hsbuf, hsbuf_small, sizeof(hsbuf_small));
+            ptls_buffer_init_tx(&hsbuf, hsbuf_small, sizeof(hsbuf_small));
             size_t inlen = ptls_get_cipher(qat.conns[offending].tls) == NULL ? clientbuf.off : 0; /* feed CH only as first flight */
             int hsret = ptls_handshake(qat.conns[offending].tls, &hsbuf, clientbuf.base, &inlen, NULL);
             if (resp_sample_conn == qat.conns[offending].tls) {

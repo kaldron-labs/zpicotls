@@ -39,12 +39,12 @@ static int encrypt_ticket_cb_fake(ptls_encrypt_ticket_t *_self, ptls_t *tls, int
     int ret;
 
     if (is_encrypt) {
-        if ((ret = ptls_buffer_reserve(dst, 32)) != 0)
+        if ((ret = ptls_buffer_reserve(dst, 32, dst->tx)) != 0)
             return ret;
         memcpy(dst->base + dst->off, fake_ticket, 32);
         dst->off += 32;
     } else {
-        if ((ret = ptls_buffer_reserve(dst, sizeof(fake_ticket))) != 0)
+        if ((ret = ptls_buffer_reserve(dst, sizeof(fake_ticket), dst->tx)) != 0)
             return ret;
         memcpy(dst->base + dst->off, fake_ticket, sizeof(fake_ticket));
         dst->off += sizeof(fake_ticket);
@@ -80,7 +80,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 
     // buffers
     ptls_buffer_t server_response;
-    ptls_buffer_init(&server_response, "", 0);
+    ptls_buffer_init_tx(&server_response, "", 0);
 
     // accept client_hello
     size_t consumed = size;
@@ -91,7 +91,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
         size = size - consumed;
         // reset buffer
         ptls_buffer_dispose(&server_response);
-        ptls_buffer_init(&server_response, "", 0);
+        ptls_buffer_init_rx(&server_response, "", 0);
         // receive messages
         ptls_receive(tls_server, &server_response, data + consumed, &size);
     }

@@ -41,3 +41,10 @@ deps/picotest
 GPATH
 GRTAGS
 GTAGS
+*.a
+*.pc
+cli
+ptlsbench
+test-fusion.t
+test-minicrypto.t
+test-openssl.t
