@@ -350,7 +350,7 @@ typedef struct st_ptls_iovec_t {
  */
 typedef struct st_ptls_buffer_t {
     uint8_t *base;
-    void *origin;         /* origin, NULL for internal, used to distinguish application buffer from internal */
+    void *origin;         /* origin, NULL for internal, distinguishes application buffer from internal */
     uint32_t capacity;
     uint32_t off;
     uint8_t is_allocated; /* boolean */

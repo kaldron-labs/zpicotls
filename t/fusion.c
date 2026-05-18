@@ -521,12 +521,12 @@ static void test_generated_all(ptls_aead_algorithm_t *e1, ptls_aead_algorithm_t 
 
 static void test_fusion_aes128gcm(void)
 {
-    test_generated_all(&ptls_fusion_aes128gcm, &ptls_minicrypto_aes128gcm, 0);
+    test_generated_all(&ptls_fusion_aes128gcm, &ptls_minicrypto_aes128gcm, 1);
 }
 
 static void test_fusion_aes256gcm(void)
 {
-    test_generated_all(&ptls_fusion_aes256gcm, &ptls_minicrypto_aes256gcm, 0);
+    test_generated_all(&ptls_fusion_aes256gcm, &ptls_minicrypto_aes256gcm, 1);
 }
 
 static void test_fusion_aesgcm(void)

@@ -1146,7 +1146,44 @@ void aead_do_encrypt(struct st_ptls_aead_context_t *_ctx, void *output, const vo
 static void aead_do_encrypt_v(struct st_ptls_aead_context_t *ctx, void *output, ptls_iovec_t *input, size_t incnt, uint64_t seq,
                               const void *aad, size_t aadlen)
 {
-    assert(!"FIXME");
+    size_t inlen = 0;
+    uint8_t *buf = output, *tmpbuf = NULL;
+
+    for (size_t i = 0; i != incnt; ++i)
+        inlen += input[i].len;
+
+    if (incnt == 1) {
+        aead_do_encrypt(ctx, output, input[0].base, input[0].len, seq, aad, aadlen, NULL);
+        return;
+    }
+
+    size_t off = 0;
+    for (size_t i = 0; i != incnt; ++i) {
+        uintptr_t out_start = (uintptr_t)output, out_end = out_start + inlen;
+        uintptr_t in_start = (uintptr_t)input[i].base, in_end = in_start + input[i].len;
+
+        if (input[i].len != 0 && in_start < out_end && out_start < in_end && input[i].base != buf + off) {
+            if ((tmpbuf = malloc(inlen)) == NULL)
+                abort();
+            buf = tmpbuf;
+            break;
+        }
+        off += input[i].len;
+    }
+
+    off = 0;
+    for (size_t i = 0; i != incnt; ++i) {
+        if (input[i].len != 0)
+            memmove(buf + off, input[i].base, input[i].len);
+        off += input[i].len;
+    }
+
+    aead_do_encrypt(ctx, output, buf, inlen, seq, aad, aadlen, NULL);
+
+    if (tmpbuf != NULL) {
+        ptls_clear_memory(tmpbuf, inlen);
+        free(tmpbuf);
+    }
 }
 
 static size_t aead_do_decrypt(ptls_aead_context_t *_ctx, void *output, const void *input, size_t inlen, uint64_t seq,
