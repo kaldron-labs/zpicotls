@@ -3,6 +3,8 @@ CMAKE_POLICY(SET CMP0003 NEW)
 
 PROJECT(picotls VERSION 1.2)
 
+INCLUDE(GNUInstallDirs)
+
 IF (CMAKE_VERSION VERSION_LESS 3.13.0)
   MACRO (TARGET_LINK_DIRECTORIES target scope)
     link_directories(${ARGN})
@@ -79,7 +81,7 @@ IF (BROTLI_DEC_FOUND AND BROTLI_ENC_FOUND)
     LIST(APPEND CORE_FILES
         lib/certificate_compression.c)
     LIST(APPEND CORE_EXTRA_LIBS ${BROTLI_DEC_LIBRARIES} ${BROTLI_ENC_LIBRARIES})
-    LIST(APPEND CORE_EXTRA_LIBS_DIRS (${BROTLI_DEC_LIBRARY_DIRS} ${BROTLI_ENC_LIBRARY_DIRS}))
+    LIST(APPEND CORE_EXTRA_LIBS_DIRS ${BROTLI_DEC_LIBRARY_DIRS} ${BROTLI_ENC_LIBRARY_DIRS})
 ENDIF ()
 
 ADD_LIBRARY(picotls-core ${CORE_FILES})
@@ -246,10 +248,18 @@ ENDIF ()
 
 IF (WIN32)
     INCLUDE_DIRECTORIES(picotlsvs/picotls)
-    TARGET_LINK_LIBRARIES(test-minicrypto.t bcrypt ws2_32)
-    TARGET_LINK_LIBRARIES(test-openssl.t bcrypt ws2_32)
-    TARGET_LINK_LIBRARIES(test-fusion.t bcrypt ws2_32)
-    TARGET_LINK_LIBRARIES(ptlsbench bcrypt ws2_32)
+    IF (TARGET test-minicrypto.t)
+        TARGET_LINK_LIBRARIES(test-minicrypto.t bcrypt ws2_32)
+    ENDIF ()
+    IF (TARGET test-openssl.t)
+        TARGET_LINK_LIBRARIES(test-openssl.t bcrypt ws2_32)
+    ENDIF ()
+    IF (TARGET test-fusion.t)
+        TARGET_LINK_LIBRARIES(test-fusion.t bcrypt ws2_32)
+    ENDIF ()
+    IF (TARGET ptlsbench)
+        TARGET_LINK_LIBRARIES(ptlsbench bcrypt ws2_32)
+    ENDIF ()
 ENDIF ()
 
 IF (BUILD_FUZZER)
@@ -288,13 +298,6 @@ IF (BUILD_FUZZER)
     TARGET_LINK_LIBRARIES(fuzz-client-hello picotls-core picotls-openssl ${OPENSSL_CRYPTO_LIBRARIES} ${AEGIS_LIBRARIES} ${LIB_FUZZER})
 
 ENDIF()
-
-if (NOT CMAKE_INSTALL_INCLUDEDIR)
-    set(CMAKE_INSTALL_INCLUDEDIR include)
-endif()
-if (NOT CMAKE_INSTALL_LIBDIR)
-    set(CMAKE_INSTALL_LIBDIR lib)
-endif()
 
 install(FILES include/picotls.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(DIRECTORY include/picotls DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}

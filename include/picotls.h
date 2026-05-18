@@ -132,6 +132,7 @@ extern "C" {
 #define PTLS_MAX_SECRET_SIZE 32
 #define PTLS_MAX_IV_SIZE 32
 #define PTLS_MAX_DIGEST_SIZE 64
+#define PTLS_MAX_SIGNATURE_ALGORITHMS 64
 
 /* versions */
 #define PTLS_PROTOCOL_VERSION_TLS12 0x0303
@@ -351,8 +352,8 @@ typedef struct st_ptls_iovec_t {
 typedef struct st_ptls_buffer_t {
     uint8_t *base;
     void *origin;         /* origin, NULL for internal, distinguishes application buffer from internal */
-    uint32_t capacity;
-    uint32_t off;
+    size_t capacity;
+    size_t off;
     uint8_t is_allocated; /* boolean */
     uint8_t align_bits;   /* if particular alignment is required, set to log2(alignment); otherwize zero */
     uint8_t tx;           /* direction: 0 for receive-side, 1 for transmit-side */
@@ -1125,8 +1126,9 @@ typedef struct st_ptls_handshake_properties_t {
              */
             struct {
                 /**
-                 * Config offered by server e.g., by HTTPS RR. If config.base is non-NULL but config.len is zero, a grease ECH will
-                 * be sent, assuming that X25519-SHA256 KEM and SHA256-AES-128-GCM HPKE cipher is available.
+                 * An ECH config offered by server e.g., by HTTPS RR. If config.len is zero and .base is non-NULL, a grease ECH will
+                 * be sent, assuming that X25519-SHA256 KEM and SHA256-AES-128-GCM HPKE cipher is available. If .base is also NULL,
+                 * ECH will not be used at all, even if the context provided the ECH ciphers.
                  */
                 ptls_iovec_t configs;
                 /**
@@ -1195,15 +1197,15 @@ static ptls_iovec_t ptls_iovec_init(const void *p, size_t len);
  * initializes a buffer, setting the default destination to the small buffer provided as the argument.
  * `tx` is direction (0: receive-side, 1: transmit-side)
  */
-static void ptls_buffer_init(ptls_buffer_t *buf, void *smallbuf, uint32_t smallbuf_size, int tx);
+static void ptls_buffer_init(ptls_buffer_t *buf, void *smallbuf, size_t smallbuf_size, int tx);
 /**
  * initializes a receive-side buffer
  */
-static void ptls_buffer_init_rx(ptls_buffer_t *buf, void *smallbuf, uint32_t smallbuf_size);
+static void ptls_buffer_init_rx(ptls_buffer_t *buf, void *smallbuf, size_t smallbuf_size);
 /**
  * initializes a transmit-side buffer
  */
-static void ptls_buffer_init_tx(ptls_buffer_t *buf, void *smallbuf, uint32_t smallbuf_size);
+static void ptls_buffer_init_tx(ptls_buffer_t *buf, void *smallbuf, size_t smallbuf_size);
 /**
  * disposes a buffer, freeing resources allocated by the buffer itself (if any)
  */
@@ -1215,15 +1217,19 @@ void ptls_buffer__release_memory(ptls_buffer_t *buf);
 /**
  * reserves space for additional amount of memory
  */
-int ptls_buffer_reserve(ptls_buffer_t *buf, uint32_t delta, int tx);
+int ptls_buffer_reserve(ptls_buffer_t *buf, size_t delta, int tx);
 /**
  * reserves space for additional amount of memory, requiring `buf->base` to follow specified alignment
  */
-int ptls_buffer_reserve_aligned(ptls_buffer_t *buf, uint32_t delta, uint8_t align_bits, int tx);
+int ptls_buffer_reserve_aligned(ptls_buffer_t *buf, size_t delta, uint8_t align_bits, int tx);
 /**
  * internal
  */
 int ptls_buffer__do_pushv(ptls_buffer_t *buf, const void *src, size_t len);
+/**
+ * internal
+ */
+int ptls_buffer__adjust_quic_blocksize(ptls_buffer_t *buf, size_t body_size);
 /**
  * internal
  */
@@ -1289,18 +1295,23 @@ static uint8_t *ptls_encode_quicint(uint8_t *p, uint64_t v);
 #define ptls_buffer_push_block(buf, _capacity, block)                                                                              \
     do {                                                                                                                           \
         size_t capacity = (_capacity);                                                                                             \
-        ptls_buffer_pushv((buf), (uint8_t *)"\0\0\0\0\0\0\0", capacity);                                      \
+        ptls_buffer_pushv((buf), (uint8_t *)"\0\0\0\0\0\0\0", capacity != (size_t)-1 ? capacity : 1);                            \
         size_t body_start = (buf)->off;                                                                                            \
         do {                                                                                                                       \
             block                                                                                                                  \
         } while (0);                                                                                                               \
         size_t body_size = (buf)->off - body_start;                                                                                \
-        if (capacity < sizeof(size_t) && body_size >= (size_t)1 << (capacity * 8)) {                                               \
-            ret = PTLS_ERROR_BLOCK_OVERFLOW;                                                                                       \
-            goto Exit;                                                                                                             \
+        if (capacity != (size_t)-1) {                                                                                              \
+            if (capacity < sizeof(size_t) && body_size >= (size_t)1 << (capacity * 8)) {                                           \
+                ret = PTLS_ERROR_BLOCK_OVERFLOW;                                                                                   \
+                goto Exit;                                                                                                         \
+            }                                                                                                                      \
+            for (; capacity != 0; --capacity)                                                                                      \
+                (buf)->base[body_start - capacity] = (uint8_t)(body_size >> (8 * (capacity - 1)));                                 \
+        } else {                                                                                                                   \
+            if ((ret = ptls_buffer__adjust_quic_blocksize((buf), body_size)) != 0)                                                 \
+                goto Exit;                                                                                                         \
         }                                                                                                                          \
-        for (; capacity != 0; --capacity)                                                                                          \
-            (buf)->base[body_start - capacity] = (uint8_t)(body_size >> (8 * (capacity - 1)));                                     \
     } while (0)
 
 #define ptls_buffer_push_asn1_block(buf, block)                                                                                    \
@@ -1407,8 +1418,27 @@ uint64_t ptls_decode_quicint(const uint8_t **src, const uint8_t *end);
         ptls_decode_assert_block_close((src), end);                                                                                \
     } while (0)
 
+typedef struct st_ptls_log_getsni_t {
+    const char *(*cb)(void *arg);
+    void *arg;
+} ptls_log_getsni_t;
+
+/**
+ * Creates a lazy callback object for obtaining SNI. The object is used to delay materialization of SNI to only when it is needed.
+ */
+#define PTLS_LOG_DEFINE_GETSNI(suffix, type, body)                                                                                 \
+    static inline const char *ptls_log_getsni_cb_##suffix(void *_arg)                                                              \
+    {                                                                                                                              \
+        type arg = (type)_arg;                                                                                                     \
+        body                                                                                                                       \
+    }                                                                                                                              \
+    static inline ptls_log_getsni_t ptls_log_getsni_##suffix(type arg)                                                             \
+    {                                                                                                                              \
+        return (ptls_log_getsni_t){ptls_log_getsni_cb_##suffix, arg};                                                              \
+    }
+
 #if PTLS_HAVE_LOG
-#define PTLS_LOG__DO_LOG(module, name, conn_state, get_sni, get_sni_arg, add_time, block)                                          \
+#define PTLS_LOG__DO_LOG(module, name, conn_state, get_sni, add_time, block)                                                       \
     do {                                                                                                                           \
         int ptlslog_include_appdata = 0;                                                                                           \
         do {                                                                                                                       \
@@ -1416,12 +1446,11 @@ uint64_t ptls_decode_quicint(const uint8_t **src, const uint8_t *end);
             do {                                                                                                                   \
                 block                                                                                                              \
             } while (0);                                                                                                           \
-            ptlslog_include_appdata =                                                                                              \
-                ptls_log__do_write_end(&logpoint, (conn_state), (get_sni), (get_sni_arg), ptlslog_include_appdata);                \
+            ptlslog_include_appdata = ptls_log__do_write_end(&logpoint, (conn_state), (get_sni), ptlslog_include_appdata);         \
         } while (PTLS_UNLIKELY(ptlslog_include_appdata));                                                                          \
     } while (0)
 #else
-#define PTLS_LOG__DO_LOG(module, name, conn_state, get_sni, get_sni_arg, add_time, block) /* don't generate code */
+#define PTLS_LOG__DO_LOG(module, name, conn_state, get_sni, add_time, block) /* don't generate code */
 #endif
 
 #define PTLS_LOG_DEFINE_POINT(_module, _name, _var)                                                                                \
@@ -1432,7 +1461,7 @@ uint64_t ptls_decode_quicint(const uint8_t **src, const uint8_t *end);
         PTLS_LOG_DEFINE_POINT(module, name, logpoint);                                                                             \
         if (PTLS_LIKELY(ptls_log_point_maybe_active(&logpoint) == 0))                                                              \
             break;                                                                                                                 \
-        PTLS_LOG__DO_LOG(module, name, NULL, NULL, NULL, 1, {block});                                                              \
+        PTLS_LOG__DO_LOG(module, name, NULL, (ptls_log_getsni_t){NULL}, 1, {block});                                               \
     } while (0)
 
 #define PTLS_LOG_CONN(name, tls, block)                                                                                            \
@@ -1443,10 +1472,10 @@ uint64_t ptls_decode_quicint(const uint8_t **src, const uint8_t *end);
             break;                                                                                                                 \
         ptls_t *_tls = (tls);                                                                                                      \
         ptls_log_conn_state_t *conn_state = ptls_get_log_state(_tls);                                                              \
-        active &= ptls_log_conn_maybe_active(conn_state, (const char *(*)(void *))ptls_get_server_name, _tls);                     \
+        active &= ptls_log_conn_maybe_active(conn_state, ptls_log_getsni_ptls(_tls));                                              \
         if (PTLS_LIKELY(active == 0))                                                                                              \
             break;                                                                                                                 \
-        PTLS_LOG__DO_LOG(picotls, name, conn_state, (const char *(*)(void *))ptls_get_server_name, _tls, 1, {                      \
+        PTLS_LOG__DO_LOG(picotls, name, conn_state, ptls_log_getsni_ptls(_tls), 1, {                                               \
             PTLS_LOG_ELEMENT_PTR(tls, _tls);                                                                                       \
             do {                                                                                                                   \
                 block                                                                                                              \
@@ -1573,7 +1602,7 @@ static uint32_t ptls_log_point_maybe_active(struct st_ptls_log_point_t *point);
 /**
  * returns a bitmap indicating the loggers active for given connection
  */
-static uint32_t ptls_log_conn_maybe_active(ptls_log_conn_state_t *conn, const char *(*get_sni)(void *), void *get_sni_arg);
+static uint32_t ptls_log_conn_maybe_active(ptls_log_conn_state_t *conn, ptls_log_getsni_t getsni);
 
 /**
  * Returns the number of log events that were unable to be emitted.
@@ -1590,8 +1619,7 @@ size_t ptls_log_num_lost(void);
 int ptls_log_add_fd(int fd, float sample_ratio, const char *points, const char *snis, const char *addresses, int appdata);
 
 void ptls_log__recalc_point(int caller_locked, struct st_ptls_log_point_t *point);
-void ptls_log__recalc_conn(int caller_locked, struct st_ptls_log_conn_state_t *conn, const char *(*get_sni)(void *),
-                           void *get_sni_arg);
+void ptls_log__recalc_conn(int caller_locked, struct st_ptls_log_conn_state_t *conn, ptls_log_getsni_t getsni);
 void ptls_log__do_push_element_safestr(const char *prefix, size_t prefix_len, const char *s, size_t l);
 void ptls_log__do_push_element_unsafestr(const char *prefix, size_t prefix_len, const char *s, size_t l);
 void ptls_log__do_push_element_hexdump(const char *prefix, size_t prefix_len, const void *s, size_t l);
@@ -1605,8 +1633,8 @@ void ptls_log__do_push_appdata_element_unsafestr(int includes_appdata, const cha
 void ptls_log__do_push_appdata_element_hexdump(int includes_appdata, const char *prefix, size_t prefix_len, const void *s,
                                                size_t l);
 void ptls_log__do_write_start(struct st_ptls_log_point_t *point, int add_time);
-int ptls_log__do_write_end(struct st_ptls_log_point_t *point, struct st_ptls_log_conn_state_t *conn, const char *(*get_sni)(void *),
-                           void *get_sni_arg, int includes_appdata);
+int ptls_log__do_write_end(struct st_ptls_log_point_t *point, struct st_ptls_log_conn_state_t *conn, ptls_log_getsni_t getsni,
+                           int includes_appdata);
 
 /**
  * create a client object to handle new TLS connection
@@ -1941,7 +1969,7 @@ void ptls__key_schedule_update_hash(ptls_key_schedule_t *sched, const uint8_t *m
  * - all implementations must respect align_bits
  * - returns NULL on failure
  */
-extern void *(*ptls_buffer_alloc)(ptls_buffer_t *buf, uint32_t capacity, uint8_t align_bits, int tx);
+extern void *(*ptls_buffer_alloc)(ptls_buffer_t *buf, size_t capacity, uint8_t align_bits, int tx);
 /**
  * free memory for buffer
  * - this can only be overridden early in program initialization
@@ -1953,7 +1981,7 @@ extern void *(*ptls_buffer_alloc)(ptls_buffer_t *buf, uint32_t capacity, uint8_t
  * - `tx` indicates direction (0: receive-side, 1: transmit-side)
  * - buf->origin can be used to distinguish application-originated buffers
  *   from internal buffers (see pts_buffer_alloc comment above)
- * - returns NULL on failure
+ * - implementations must release resources for allocated buffers and must not fail
  */
 extern void (*ptls_buffer_free)(ptls_buffer_t *buf, int tx);
 /**
@@ -2012,6 +2040,8 @@ extern ptls_get_time_t ptls_get_time;
  */
 static void ptls_hash_clone_memcpy(void *dst, const void *src, size_t size);
 
+PTLS_LOG_DEFINE_GETSNI(ptls, ptls_t *, { return ptls_get_server_name(arg); })
+
 /* inline functions */
 
 inline uint32_t ptls_log_point_maybe_active(struct st_ptls_log_point_t *point)
@@ -2030,11 +2060,11 @@ inline void ptls_log_recalc_conn_state(ptls_log_conn_state_t *state)
     state->state.generation = 0;
 }
 
-inline uint32_t ptls_log_conn_maybe_active(ptls_log_conn_state_t *conn, const char *(*get_sni)(void *), void *get_sni_arg)
+inline uint32_t ptls_log_conn_maybe_active(ptls_log_conn_state_t *conn, ptls_log_getsni_t getsni)
 {
 #if PTLS_HAVE_LOG
     if (PTLS_UNLIKELY(conn->state.generation != ptls_log._generation))
-        ptls_log__recalc_conn(0, conn, get_sni, get_sni_arg);
+        ptls_log__recalc_conn(0, conn, getsni);
     return conn->state.active_conns;
 #else
     return 0;
@@ -2057,7 +2087,7 @@ inline ptls_iovec_t ptls_iovec_init(const void *p, size_t len)
     return r;
 }
 
-inline void ptls_buffer_init(ptls_buffer_t *buf, void *smallbuf, uint32_t smallbuf_size, int tx)
+inline void ptls_buffer_init(ptls_buffer_t *buf, void *smallbuf, size_t smallbuf_size, int tx)
 {
     assert(tx == 0 || tx == 1);
     assert(smallbuf != NULL);
@@ -2070,12 +2100,12 @@ inline void ptls_buffer_init(ptls_buffer_t *buf, void *smallbuf, uint32_t smallb
     buf->tx = (uint8_t)tx;
 }
 
-inline void ptls_buffer_init_rx(ptls_buffer_t *buf, void *smallbuf, uint32_t smallbuf_size)
+inline void ptls_buffer_init_rx(ptls_buffer_t *buf, void *smallbuf, size_t smallbuf_size)
 {
     ptls_buffer_init(buf, smallbuf, smallbuf_size, 0);
 }
 
-inline void ptls_buffer_init_tx(ptls_buffer_t *buf, void *smallbuf, uint32_t smallbuf_size)
+inline void ptls_buffer_init_tx(ptls_buffer_t *buf, void *smallbuf, size_t smallbuf_size)
 {
     ptls_buffer_init(buf, smallbuf, smallbuf_size, 1);
 }

@@ -143,7 +143,7 @@ int handshake_init(ptls_t * tls, ptls_buffer_t * sendbuf, ptls_handshake_propert
 {
     size_t inlen = 0, roff = 0;
 
-    ptls_buffer_init(sendbuf, "", 0);
+    ptls_buffer_init_tx(sendbuf, "", 0);
     int ret = ptls_handshake(tls, sendbuf, NULL, NULL, ph_prop);
 
     return ret;
@@ -155,7 +155,7 @@ int handshake_progress(ptls_t * tls, ptls_buffer_t * sendbuf, ptls_buffer_t * re
     size_t inlen = 0, roff = 0;
     int ret = 0;
 
-    ptls_buffer_init(sendbuf, "", 0);
+    ptls_buffer_init_tx(sendbuf, "", 0);
 
     /* Provide the data */
     while (roff < recvbuf->off && (ret == 0 || ret == PTLS_ERROR_IN_PROGRESS))
@@ -696,4 +696,3 @@ int main()
 
     return ret;
 }
-

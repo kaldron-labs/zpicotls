@@ -487,6 +487,124 @@ static void test_generated_set_capacity(void)
     ptls_aead_free(dec);
 }
 
+enum deterministic_multivec_case {
+    DET_MULTIVEC_SEPARATE,
+    DET_MULTIVEC_IN_PLACE,
+    DET_MULTIVEC_OVERLAP,
+    DET_MULTIVEC_ZERO,
+    DET_MULTIVEC_LARGE_OVERLAP
+};
+
+static ptls_aead_algorithm_t *det_multivec_encryptor, *det_multivec_decryptor;
+static enum deterministic_multivec_case det_multivec_case;
+static int det_multivec_iv96;
+
+static void fill_deterministic_bytes(uint8_t *p, size_t len, uint8_t seed)
+{
+    for (size_t i = 0; i != len; ++i)
+        p[i] = (uint8_t)(seed + i * 31 + i / 7);
+}
+
+static void test_deterministic_multivec_one(void)
+{
+    uint8_t key[32], iv[PTLS_AESGCM_IV_SIZE], aad[29], plaintext[3000], encrypted[sizeof(plaintext) + PTLS_AESGCM_TAG_SIZE],
+        decrypted[sizeof(plaintext)], work[sizeof(plaintext) + 64 + PTLS_AESGCM_TAG_SIZE];
+    uint8_t seq32[4] = {0x12, 0x34, 0x56, 0x78};
+    ptls_iovec_t input[4];
+    uint8_t *output = encrypted, *in = plaintext;
+    size_t textlen = 97, incnt = 3;
+    uint64_t seq = 12345;
+
+    fill_deterministic_bytes(key, sizeof(key), 1);
+    fill_deterministic_bytes(iv, sizeof(iv), 2);
+    fill_deterministic_bytes(aad, sizeof(aad), 3);
+    fill_deterministic_bytes(plaintext, sizeof(plaintext), 4);
+    memset(encrypted, 0xcc, sizeof(encrypted));
+    memset(decrypted, 0xdd, sizeof(decrypted));
+    memset(work, 0xee, sizeof(work));
+
+    switch (det_multivec_case) {
+    case DET_MULTIVEC_SEPARATE:
+        input[0] = ptls_iovec_init(plaintext, 13);
+        input[1] = ptls_iovec_init(plaintext + 13, 29);
+        input[2] = ptls_iovec_init(plaintext + 42, textlen - 42);
+        break;
+    case DET_MULTIVEC_IN_PLACE:
+        memcpy(work, plaintext, textlen);
+        output = work;
+        in = work;
+        input[0] = ptls_iovec_init(in, 13);
+        input[1] = ptls_iovec_init(in + 13, 29);
+        input[2] = ptls_iovec_init(in + 42, textlen - 42);
+        break;
+    case DET_MULTIVEC_OVERLAP:
+        memcpy(work + 8, plaintext, textlen);
+        output = work;
+        in = work + 8;
+        input[0] = ptls_iovec_init(in, 13);
+        input[1] = ptls_iovec_init(in + 13, 29);
+        input[2] = ptls_iovec_init(in + 42, textlen - 42);
+        break;
+    case DET_MULTIVEC_ZERO:
+        input[0] = ptls_iovec_init(plaintext, 13);
+        input[1] = ptls_iovec_init(plaintext + 13, 0);
+        input[2] = ptls_iovec_init(plaintext + 13, textlen - 13);
+        break;
+    case DET_MULTIVEC_LARGE_OVERLAP:
+        textlen = 3000;
+        memcpy(work + 16, plaintext, textlen);
+        output = work;
+        in = work + 16;
+        input[0] = ptls_iovec_init(in, 997);
+        input[1] = ptls_iovec_init(in + 997, 1003);
+        input[2] = ptls_iovec_init(in + 2000, textlen - 2000);
+        break;
+    }
+
+    ptls_aead_context_t *enc = ptls_aead_new_direct(det_multivec_encryptor, 1, key, iv);
+    ptls_aead_context_t *dec = ptls_aead_new_direct(det_multivec_decryptor, 0, key, iv);
+    if (det_multivec_iv96) {
+        ptls_aead_xor_iv(enc, seq32, sizeof(seq32));
+        ptls_aead_xor_iv(dec, seq32, sizeof(seq32));
+    }
+
+    ptls_aead_encrypt_v(enc, output, input, incnt, seq, aad, sizeof(aad));
+    size_t declen = ptls_aead_decrypt(dec, decrypted, output, textlen + PTLS_AESGCM_TAG_SIZE, seq, aad, sizeof(aad));
+    ok(declen == textlen);
+    ok(memcmp(decrypted, plaintext, textlen) == 0);
+
+    ptls_aead_free(enc);
+    ptls_aead_free(dec);
+}
+
+static void run_deterministic_multivec_case(enum deterministic_multivec_case c, const char *name)
+{
+    char subtest_name[64];
+
+    det_multivec_case = c;
+    det_multivec_iv96 = 0;
+    subtest(name, test_deterministic_multivec_one);
+    det_multivec_iv96 = 1;
+    snprintf(subtest_name, sizeof(subtest_name), "%s-iv96", name);
+    subtest(subtest_name, test_deterministic_multivec_one);
+}
+
+static void test_deterministic_multivec_all(void)
+{
+    run_deterministic_multivec_case(DET_MULTIVEC_SEPARATE, "separate-3vec");
+    run_deterministic_multivec_case(DET_MULTIVEC_IN_PLACE, "in-place-contiguous");
+    run_deterministic_multivec_case(DET_MULTIVEC_OVERLAP, "partial-overlap");
+    run_deterministic_multivec_case(DET_MULTIVEC_ZERO, "zero-length-vec");
+    run_deterministic_multivec_case(DET_MULTIVEC_LARGE_OVERLAP, "large-overlap");
+}
+
+static void test_deterministic_multivec(ptls_aead_algorithm_t *encryptor, ptls_aead_algorithm_t *decryptor)
+{
+    det_multivec_encryptor = encryptor;
+    det_multivec_decryptor = decryptor;
+    subtest("multivec-cases", test_deterministic_multivec_all);
+}
+
 static void test_generated_all(ptls_aead_algorithm_t *e1, ptls_aead_algorithm_t *e2, int can_multivec)
 {
     test_generated_encryptor = e1;
@@ -522,11 +640,13 @@ static void test_generated_all(ptls_aead_algorithm_t *e1, ptls_aead_algorithm_t 
 static void test_fusion_aes128gcm(void)
 {
     test_generated_all(&ptls_fusion_aes128gcm, &ptls_minicrypto_aes128gcm, 1);
+    test_deterministic_multivec(&ptls_fusion_aes128gcm, &ptls_minicrypto_aes128gcm);
 }
 
 static void test_fusion_aes256gcm(void)
 {
     test_generated_all(&ptls_fusion_aes256gcm, &ptls_minicrypto_aes256gcm, 1);
+    test_deterministic_multivec(&ptls_fusion_aes256gcm, &ptls_minicrypto_aes256gcm);
 }
 
 static void test_fusion_aesgcm(void)

@@ -105,6 +105,8 @@ struct ctr_context {
 struct aesgcm_context {
     ptls_aead_context_t super;
     ptls_fusion_aesgcm_context_t *aesgcm;
+    uint8_t *scratch;
+    size_t scratch_capacity;
     /**
      * retains the static IV in the upper 96 bits (in little endian)
      */
@@ -1066,8 +1068,8 @@ static void ctr_transform(ptls_cipher_context_t *_ctx, void *output, const void 
 {
     struct ctr_context *ctx = (struct ctr_context *)_ctx;
 
-    assert((ctx->is_ready && len <= 16) ||
-           !"CTR transfomation is supported only once per call to `init` and the maximum size is limited  to 16 bytes");
+    assert(ctx->is_ready && len <= 16 &&
+           "CTR transfomation is supported only once per call to `init` and the maximum size is limited to 16 bytes");
     ctx->is_ready = 0;
 
     if (len < 16) {
@@ -1105,6 +1107,28 @@ static void aesgcm_dispose_crypto(ptls_aead_context_t *_ctx)
     struct aesgcm_context *ctx = (struct aesgcm_context *)_ctx;
 
     ptls_fusion_aesgcm_free(ctx->aesgcm);
+    ctx->aesgcm = NULL;
+    if (ctx->scratch != NULL) {
+        ptls_clear_memory(ctx->scratch, ctx->scratch_capacity);
+        free(ctx->scratch);
+        ctx->scratch = NULL;
+        ctx->scratch_capacity = 0;
+    }
+}
+
+static uint8_t *aesgcm_get_scratch(struct aesgcm_context *ctx, size_t required)
+{
+    if (required > ctx->scratch_capacity) {
+        uint8_t *newp = malloc(required);
+        assert(newp != NULL && "fusion assumes sufficient amount of memory to be available");
+        if (ctx->scratch != NULL) {
+            ptls_clear_memory(ctx->scratch, ctx->scratch_capacity);
+            free(ctx->scratch);
+        }
+        ctx->scratch = newp;
+        ctx->scratch_capacity = required;
+    }
+    return ctx->scratch;
 }
 
 static void aead_do_encrypt_init(ptls_aead_context_t *_ctx, uint64_t seq, const void *aad, size_t aadlen)
@@ -1138,22 +1162,29 @@ void aead_do_encrypt(struct st_ptls_aead_context_t *_ctx, void *output, const vo
 {
     struct aesgcm_context *ctx = (void *)_ctx;
 
-    if (inlen + aadlen > ctx->aesgcm->capacity)
+    if (inlen + aadlen > ctx->aesgcm->capacity) {
         ctx->aesgcm = ptls_fusion_aesgcm_set_capacity(ctx->aesgcm, inlen + aadlen);
+        assert(ctx->aesgcm != NULL && "fusion assumes sufficient amount of memory to be available");
+    }
     ptls_fusion_aesgcm_encrypt(ctx->aesgcm, output, input, inlen, calc_counter(ctx, seq), aad, aadlen, supp);
 }
 
-static void aead_do_encrypt_v(struct st_ptls_aead_context_t *ctx, void *output, ptls_iovec_t *input, size_t incnt, uint64_t seq,
+static void aead_do_encrypt_v(struct st_ptls_aead_context_t *_ctx, void *output, ptls_iovec_t *input, size_t incnt, uint64_t seq,
                               const void *aad, size_t aadlen)
 {
+    struct aesgcm_context *ctx = (struct aesgcm_context *)_ctx;
     size_t inlen = 0;
-    uint8_t *buf = output, *tmpbuf = NULL;
+    uint8_t *buf = output;
+    int use_scratch = 0;
 
-    for (size_t i = 0; i != incnt; ++i)
+    for (size_t i = 0; i != incnt; ++i) {
+        if (input[i].len > SIZE_MAX - inlen)
+            abort();
         inlen += input[i].len;
+    }
 
     if (incnt == 1) {
-        aead_do_encrypt(ctx, output, input[0].base, input[0].len, seq, aad, aadlen, NULL);
+        aead_do_encrypt(_ctx, output, input[0].base, input[0].len, seq, aad, aadlen, NULL);
         return;
     }
 
@@ -1162,14 +1193,15 @@ static void aead_do_encrypt_v(struct st_ptls_aead_context_t *ctx, void *output, 
         uintptr_t out_start = (uintptr_t)output, out_end = out_start + inlen;
         uintptr_t in_start = (uintptr_t)input[i].base, in_end = in_start + input[i].len;
 
-        if (input[i].len != 0 && in_start < out_end && out_start < in_end && input[i].base != buf + off) {
-            if ((tmpbuf = malloc(inlen)) == NULL)
-                abort();
-            buf = tmpbuf;
+        if (input[i].len != 0 && in_start < out_end && out_start < in_end && input[i].base != (uint8_t *)output + off) {
+            use_scratch = 1;
             break;
         }
         off += input[i].len;
     }
+
+    if (use_scratch)
+        buf = aesgcm_get_scratch(ctx, inlen);
 
     off = 0;
     for (size_t i = 0; i != incnt; ++i) {
@@ -1178,12 +1210,10 @@ static void aead_do_encrypt_v(struct st_ptls_aead_context_t *ctx, void *output, 
         off += input[i].len;
     }
 
-    aead_do_encrypt(ctx, output, buf, inlen, seq, aad, aadlen, NULL);
+    aead_do_encrypt(_ctx, output, buf, inlen, seq, aad, aadlen, NULL);
 
-    if (tmpbuf != NULL) {
-        ptls_clear_memory(tmpbuf, inlen);
-        free(tmpbuf);
-    }
+    if (use_scratch)
+        ptls_clear_memory(buf, inlen);
 }
 
 static size_t aead_do_decrypt(ptls_aead_context_t *_ctx, void *output, const void *input, size_t inlen, uint64_t seq,
@@ -1195,8 +1225,10 @@ static size_t aead_do_decrypt(ptls_aead_context_t *_ctx, void *output, const voi
         return SIZE_MAX;
 
     size_t enclen = inlen - 16;
-    if (enclen + aadlen > ctx->aesgcm->capacity)
+    if (enclen + aadlen > ctx->aesgcm->capacity) {
         ctx->aesgcm = ptls_fusion_aesgcm_set_capacity(ctx->aesgcm, enclen + aadlen);
+        assert(ctx->aesgcm != NULL && "fusion assumes sufficient amount of memory to be available");
+    }
     if (!ptls_fusion_aesgcm_decrypt(ctx->aesgcm, output, input, enclen, calc_counter(ctx, seq), aad, aadlen,
                                     (const uint8_t *)input + enclen))
         return SIZE_MAX;
@@ -1223,6 +1255,8 @@ static int aesgcm_setup(ptls_aead_context_t *_ctx, int is_enc, const void *key, 
 {
     struct aesgcm_context *ctx = (struct aesgcm_context *)_ctx;
 
+    ctx->scratch = NULL;
+    ctx->scratch_capacity = 0;
     ctx->static_iv = loadn128(iv, PTLS_AESGCM_IV_SIZE);
     ctx->static_iv = _mm_shuffle_epi8(ctx->static_iv, byteswap128);
     if (key == NULL)
@@ -1239,7 +1273,7 @@ static int aesgcm_setup(ptls_aead_context_t *_ctx, int is_enc, const void *key, 
     ctx->super.do_decrypt = aead_do_decrypt;
 
     ctx->aesgcm = new_aesgcm(key, key_size, 1500 /* assume ordinary packet size */, 0 /* no support for aesni256 yet */);
-
+    assert(ctx->aesgcm != NULL && "fusion assumes sufficient amount of memory to be available");
     return 0;
 }
 
@@ -2149,6 +2183,8 @@ static int non_temporal_setup(ptls_aead_context_t *_ctx, int is_enc, const void 
     struct aesgcm_context *ctx = (struct aesgcm_context *)_ctx;
     int aesni256 = is_enc && ptls_fusion_can_aesni256;
 
+    ctx->scratch = NULL;
+    ctx->scratch_capacity = 0;
     ctx->static_iv = loadn128(iv, PTLS_AESGCM_IV_SIZE);
     ctx->static_iv = _mm_shuffle_epi8(ctx->static_iv, byteswap128);
     if (key == NULL)
@@ -2175,7 +2211,7 @@ static int non_temporal_setup(ptls_aead_context_t *_ctx, int is_enc, const void 
         new_aesgcm(key, key_size,
                    7 * (ptls_fusion_can_aesni256 ? 32 : 16), // 6 blocks at once, plus len(A) | len(C) that we might append
                    aesni256);
-
+    assert(ctx->aesgcm != NULL && "fusion assumes sufficient amount of memory to be available");
     return 0;
 }
 
