@@ -1,6 +1,31 @@
 picotls
 ===
 
+This is a maintained fork of Picotls, with intentional breaking API changes for improved buffer management, zero-copy buffer move across API boundaries, and in-place encrypt/decrypt. The fork is periodically synced to merge in upstream commits.
+
+Key changes:
+- Buffer API overhaul: ptls_buffer_t now tracks origin and tx direction, and buffer
+  initialization/reserve APIs changed to carry RX/TX intent. Public additions include
+  ptls_buffer_init_rx, ptls_buffer_init_tx, overrideable ptls_buffer_alloc, and ptls_buffer_free
+  in include/picotls.h:1204. Core paths now assert/check buffer direction in send/receive/
+  export/handshake code in lib/picotls.c:573.
+- Custom buffer allocation hooks: buffer growth is routed through overridable allocator/free
+  callbacks, preserving alignment and direction metadata. Tests cover allocation, alignment,
+  failure behavior, and RX/TX direction in t/picotls.c:273.
+- Fusion AES-GCM multivector encryption: upstream’s aead_do_encrypt_v placeholder is implemented
+  in lib/fusion.c:1172. It handles multi-iovec input, in-place contiguous encryption, partial
+  overlap via reusable scratch space, and clears scratch memory. Deterministic overlap/
+  regression tests were added in t/fusion.c:490.
+- Build/install/package work: CMake now declares version 1.3, includes install rules, installs
+  backend-specific headers/libraries, and generates pkg-config files for core/minicrypto/fusion/
+  openssl/mbedtls in CMakeLists.txt:4 and cmake/picotls.pc.in. A local Arch/MSYS-style
+  PKGBUILD:1 was added.
+- Local docs and AI tooling: added BUFFERS.md, CODEBASE.md, AGENTS.md, plan.md, review.md,
+  source.yaml, .ctags.d/picotls.ctags, and gtags.conf.
+- Smaller compatibility changes: assorted call sites were updated for the new buffer API across
+  HPKE, OpenSSL ticket encryption/decryption, fuzzers, tests, and backend code. The fork also
+  deletes the picotls-esni target via its older PR branch history.
+
 [![CI](https://github.com/h2o/picotls/actions/workflows/ci.yml/badge.svg)](https://github.com/h2o/picotls/actions/workflows/ci.yml)
 
 Picotls is a [TLS 1.3 (RFC 8446)](https://tools.ietf.org/html/rfc8446) protocol stack written in C, with the following features:
