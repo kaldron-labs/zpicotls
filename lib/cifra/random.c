@@ -32,8 +32,8 @@
 #include <unistd.h>
 #endif
 #include "drbg.h"
-#include "picotls.h"
-#include "picotls/minicrypto.h"
+#include "zpicotls.h"
+#include "zpicotls/minicrypto.h"
 #include <stdio.h>
 #ifdef _WIN32
 #ifdef _WINDOWS_XP

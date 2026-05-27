@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018 Fastly
+ * Copyright (c) 2016 DeNA Co., Ltd., Kazuho Oku
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to
@@ -19,41 +19,35 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
-#ifndef picotls_certificate_compression_h
-#define picotls_certificate_compression_h
+#ifndef picotls_bcrypt_h
+#define picotls_bcrypt_h
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#include "picotls.h"
+#include "../zpicotls.h"
 
-#define PTLS_CERTIFICATE_COMPRESSION_ALGORITHM_GZIP 1
-#define PTLS_CERTIFICATE_COMPRESSION_ALGORITHM_BROTLI 2
+#ifdef _WIN32
+#include <bcrypt.h>
 
-typedef struct st_ptls_emit_compressed_certificate_t {
-    ptls_emit_certificate_t super;
-    uint16_t algo;
-    struct st_ptls_compressed_certificate_entry_t {
-        uint32_t uncompressed_length;
-        ptls_iovec_t bytes;
-    } with_ocsp_status, without_ocsp_status;
-} ptls_emit_compressed_certificate_t;
+extern ptls_cipher_algorithm_t ptls_bcrypt_aes128ecb;
+extern ptls_cipher_algorithm_t ptls_bcrypt_aes256ecb;
+extern ptls_cipher_algorithm_t ptls_bcrypt_aes128ctr;
+extern ptls_cipher_algorithm_t ptls_bcrypt_aes256ctr;
 
-extern ptls_decompress_certificate_t ptls_decompress_certificate;
+extern ptls_aead_algorithm_t ptls_bcrypt_aes128gcm;
+extern ptls_aead_algorithm_t ptls_bcrypt_aes256gcm;
 
-/**
- * initializes a certificate emitter that precompresses a certificate chain (and ocsp status)
- */
-int ptls_init_compressed_certificate(ptls_emit_compressed_certificate_t *ecc, ptls_iovec_t *certificates, size_t num_certificates,
-                                     ptls_iovec_t ocsp_status);
-/**
- *
- */
-void ptls_dispose_compressed_certificate(ptls_emit_compressed_certificate_t *ecc);
+extern ptls_hash_algorithm_t ptls_bcrypt_sha256;
+extern ptls_hash_algorithm_t ptls_bcrypt_sha384;
+
+extern ptls_cipher_suite_t ptls_bcrypt_aes128gcmsha256;
+extern ptls_cipher_suite_t ptls_bcrypt_aes256gcmsha384;
+#endif
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif
+#endif /* picotls_bcrypt_h */

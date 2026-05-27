@@ -29,7 +29,7 @@ extern "C" {
 #include <stddef.h>
 #include <emmintrin.h>
 #include <immintrin.h>
-#include "../picotls.h"
+#include "../zpicotls.h"
 
 #define PTLS_FUSION_AES128_ROUNDS 10
 #define PTLS_FUSION_AES256_ROUNDS 14

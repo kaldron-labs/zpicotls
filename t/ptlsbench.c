@@ -31,20 +31,20 @@
 #include <assert.h>
 #include <string.h>
 #include <stdio.h>
-#include "picotls.h"
-#include "picotls/ffx.h"
-#include "picotls/minicrypto.h"
-#include "picotls/openssl.h"
+#include "zpicotls.h"
+#include "zpicotls/ffx.h"
+#include "zpicotls/minicrypto.h"
+#include "zpicotls/openssl.h"
 #ifndef _WIN32
 #ifdef PTLS_HAVE_FUSION
-#include "picotls/fusion.h"
+#include "zpicotls/fusion.h"
 #endif
 #endif
 #include <openssl/opensslv.h>
 
 #ifdef _WIN32
 #include <bcrypt.h>
-#include "picotls/ptlsbcrypt.h"
+#include "zpicotls/ptlsbcrypt.h"
 #ifdef _DEBUG
 #define BENCH_MODE "check"
 #else
@@ -60,7 +60,7 @@
 #endif
 
 #ifdef PTLS_HAVE_MBEDTLS
-#include "picotls/mbedtls.h"
+#include "zpicotls/mbedtls.h"
 #endif
 
 /* Time in microseconds */

@@ -20,8 +20,8 @@
  * IN THE SOFTWARE.
  */
 #include <stddef.h>
-#include "picotls.h"
-#include "picotls/minicrypto.h"
+#include "zpicotls.h"
+#include "zpicotls/minicrypto.h"
 
 ptls_cipher_suite_t *ptls_minicrypto_cipher_suites[] = { // ciphers used with sha512 and sha384 (must be first)
     &ptls_minicrypto_aes256gcmsha384,

@@ -25,8 +25,8 @@
 #include "poly1305.h"
 #include "salsa20.h"
 #include "sha2.h"
-#include "picotls.h"
-#include "picotls/minicrypto.h"
+#include "zpicotls.h"
+#include "zpicotls/minicrypto.h"
 #include "../chacha20poly1305.h"
 
 struct chacha20_context_t {

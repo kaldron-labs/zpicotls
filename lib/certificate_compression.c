@@ -23,7 +23,7 @@
 #include <stdlib.h>
 #include "brotli/decode.h"
 #include "brotli/encode.h"
-#include "picotls/certificate_compression.h"
+#include "zpicotls/certificate_compression.h"
 
 static inline int decompress_certificate(ptls_decompress_certificate_t *self, ptls_t *tls, uint16_t algorithm, ptls_iovec_t output,
                                          ptls_iovec_t input)

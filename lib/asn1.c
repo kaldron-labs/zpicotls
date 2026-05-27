@@ -27,9 +27,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
-#include "picotls.h"
-#include "picotls/minicrypto.h"
-#include "picotls/asn1.h"
+#include "zpicotls.h"
+#include "zpicotls/minicrypto.h"
+#include "zpicotls/asn1.h"
 
 static char const *asn1_type_classes[4] = {"Universal", "Application", "Context-specific", "Private"};
 

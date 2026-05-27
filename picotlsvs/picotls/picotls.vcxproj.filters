@@ -84,13 +84,13 @@
     <ClInclude Include="..\..\deps\cifra\src\tassert.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\..\include\picotls\minicrypto.h">
+    <ClInclude Include="..\..\include\zpicotls\minicrypto.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\..\include\picotls\asn1.h">
+    <ClInclude Include="..\..\include\zpicotls\asn1.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\..\include\picotls\pembase64.h">
+    <ClInclude Include="..\..\include\zpicotls\pembase64.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

@@ -31,7 +31,7 @@ extern "C" {
 #include <openssl/hmac.h>
 #include <openssl/x509.h>
 #include <openssl/opensslconf.h>
-#include "../picotls.h"
+#include "../zpicotls.h"
 
 #if OPENSSL_VERSION_NUMBER >= 0x10100000L && !defined(OPENSSL_NO_CHACHA) && !defined(OPENSSL_NO_POLY1305)
 #define PTLS_OPENSSL_HAVE_CHACHA20_POLY1305 1

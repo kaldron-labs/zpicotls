@@ -20,7 +20,7 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\..\include\picotls\ptlsbcrypt.h">
+    <ClInclude Include="..\..\include\zpicotls\ptlsbcrypt.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

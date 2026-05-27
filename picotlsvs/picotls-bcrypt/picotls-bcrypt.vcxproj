@@ -77,7 +77,7 @@
       <SDLCheck>true</SDLCheck>
       <ConformanceMode>true</ConformanceMode>
       <PreprocessorDefinitions>_DEBUG;_LIB;_WINDOWS;_WINDOWS64;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(ProjectDir)..\picotls;$(ProjectDir);$(ProjectDir)..\..\picotls;$(ProjectDir)..\..\include;$(ProjectDir)..\..\include\picotls;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\picotls;$(ProjectDir);$(ProjectDir)..\..\picotls;$(ProjectDir)..\..\include;$(ProjectDir)..\..\include\zpicotls;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -90,7 +90,7 @@
       <SDLCheck>true</SDLCheck>
       <ConformanceMode>true</ConformanceMode>
       <PreprocessorDefinitions>WIN32;_DEBUG;_LIB;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(ProjectDir)..\picotls;$(ProjectDir);$(ProjectDir)..\..\picotls;$(ProjectDir)..\..\include;$(ProjectDir)..\..\include\picotls;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\picotls;$(ProjectDir);$(ProjectDir)..\..\picotls;$(ProjectDir)..\..\include;$(ProjectDir)..\..\include\zpicotls;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -105,7 +105,7 @@
       <SDLCheck>true</SDLCheck>
       <ConformanceMode>true</ConformanceMode>
       <PreprocessorDefinitions>WIN32;NDEBUG;_LIB;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(ProjectDir)..\picotls;$(ProjectDir);$(ProjectDir)..\..\picotls;$(ProjectDir)..\..\include;$(ProjectDir)..\..\include\picotls;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\picotls;$(ProjectDir);$(ProjectDir)..\..\picotls;$(ProjectDir)..\..\include;$(ProjectDir)..\..\include\zpicotls;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -122,7 +122,7 @@
       <SDLCheck>true</SDLCheck>
       <ConformanceMode>true</ConformanceMode>
       <PreprocessorDefinitions>NDEBUG;_LIB;_WINDOWS;_WINDOWS64;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(ProjectDir)..\picotls;$(ProjectDir);$(ProjectDir)..\..\picotls;$(ProjectDir)..\..\include;$(ProjectDir)..\..\include\picotls;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\picotls;$(ProjectDir);$(ProjectDir)..\..\picotls;$(ProjectDir)..\..\include;$(ProjectDir)..\..\include\zpicotls;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -134,7 +134,7 @@
     <ClCompile Include="..\..\lib\ptlsbcrypt.c" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\..\include\picotls\ptlsbcrypt.h" />
+    <ClInclude Include="..\..\include\zpicotls\ptlsbcrypt.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

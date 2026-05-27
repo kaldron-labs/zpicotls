@@ -20,7 +20,7 @@
  * IN THE SOFTWARE.
  */
 #include <stdlib.h>
-#include "picotls.h"
+#include "zpicotls.h"
 
 #define HPKE_V1_LABEL "HPKE-v1"
 

@@ -1,30 +1,30 @@
 ## Summary
-This codebase is a C implementation of the picotls TLS stack. The public API in `include/picotls.h` defines the TLS context, buffer, crypto algorithm interfaces, handshake properties, and utility helpers, while the core protocol logic lives in `lib/picotls.c`. Multiple crypto backends are supported via pluggable algorithm objects (OpenSSL, mbedTLS/PSA, a minimal in-tree minicrypto based on Cifra and micro-ecc, Windows BCrypt, and x86 SIMD fusion). Additional modules provide HPKE, ECH helpers, certificate compression, QUIC-LB transforms, FFX format-preserving encryption, ASN.1/PEM parsing, and logging. Tests and tooling in `t/` exercise the core protocol, backends, and feature modules, with vendored crypto implementations under `deps/`. Research conducted on January 1, 2026.
+This codebase is a C implementation of the zpicotls TLS stack. The public API in `include/zpicotls.h` defines the TLS context, buffer, crypto algorithm interfaces, handshake properties, and utility helpers, while the core protocol logic lives in `lib/picotls.c`. Multiple crypto backends are supported via pluggable algorithm objects (OpenSSL, mbedTLS/PSA, a minimal in-tree minicrypto based on Cifra and micro-ecc, Windows BCrypt, and x86 SIMD fusion). Additional modules provide HPKE, ECH helpers, certificate compression, QUIC-LB transforms, FFX format-preserving encryption, ASN.1/PEM parsing, and logging. Tests and tooling in `t/` exercise the core protocol, backends, and feature modules, with vendored crypto implementations under `deps/`. Research conducted on January 1, 2026.
 
 ## Coding style and conventions
 - 4-space indentation with K&R/LLVM-style braces on the same line as declarations (e.g., function definitions in `lib/*.c`).
-- Public API functions and types use the `ptls_` prefix; struct tags use `st_` (e.g., `struct st_ptls_context_t`) with `typedef` aliases (e.g., `ptls_context_t`) in `include/picotls.h`.
+- Public API functions and types use the `ptls_` prefix; struct tags use `st_` (e.g., `struct st_ptls_context_t`) with `typedef` aliases (e.g., `ptls_context_t`) in `include/zpicotls.h`.
 - Constants and feature flags are uppercase with `PTLS_` prefixes; compile-time configuration uses `#if`/`#ifdef` guards across platforms.
 - File-scope helpers are `static` and often `static inline` in headers for performance (e.g., `lib/chacha20poly1305.h`).
-- Vendor libraries keep their native prefixes (`cf_` for Cifra, `uECC_` for micro-ecc), while picotls backends wrap them with `ptls_*` objects.
+- Vendor libraries keep their native prefixes (`cf_` for Cifra, `uECC_` for micro-ecc), while zpicotls backends wrap them with `ptls_*` objects.
 
 ## Detailed Findings
 
-### Public API and core types (include/picotls.h)
-- Defines the main TLS context, handshake property structures, and logging types used throughout the codebase (`include/picotls.h:867`, `include/picotls.h:1091`, `include/picotls.h:1544`).
-- Defines the crypto abstraction interfaces for key exchange, cipher, AEAD, and cipher suites (`include/picotls.h:384`, `include/picotls.h:463`, `include/picotls.h:518`, `include/picotls.h:643`).
-- Provides buffer and iovec types used for message and record processing (`include/picotls.h:343`, `include/picotls.h:351`).
+### Public API and core types (include/zpicotls.h)
+- Defines the main TLS context, handshake property structures, and logging types used throughout the codebase (`include/zpicotls.h:867`, `include/zpicotls.h:1091`, `include/zpicotls.h:1544`).
+- Defines the crypto abstraction interfaces for key exchange, cipher, AEAD, and cipher suites (`include/zpicotls.h:384`, `include/zpicotls.h:463`, `include/zpicotls.h:518`, `include/zpicotls.h:643`).
+- Provides buffer and iovec types used for message and record processing (`include/zpicotls.h:343`, `include/zpicotls.h:351`).
 
-### Backend API headers (include/picotls/*.h)
-- ASN.1 validation and parsing API used by PEM/key helpers (`include/picotls/asn1.h:42`).
-- Certificate compression API with brotli-based decompressor and compressed certificate emitter (`include/picotls/certificate_compression.h:43`, `include/picotls/certificate_compression.h:48`).
-- FFX format-preserving encryption context and setup helpers (`include/picotls/ffx.h:78`, `include/picotls/ffx.h:129`, `include/picotls/ffx.h:136`).
-- Fusion AES-ECB/AES-GCM and QUIC-LB interfaces, plus CPU capability check (`include/picotls/fusion.h:41`, `include/picotls/fusion.h:81`, `include/picotls/fusion.h:111`).
-- mbedTLS/PSA backend algorithm declarations and key loading hooks (`include/picotls/mbedtls.h:34`, `include/picotls/mbedtls.h:61`, `include/picotls/mbedtls.h:63`).
-- Minicrypto backend declarations for algorithms, key exchange, and PEM key loading (`include/picotls/minicrypto.h:35`, `include/picotls/minicrypto.h:40`, `include/picotls/minicrypto.h:45`, `include/picotls/minicrypto.h:73`).
-- OpenSSL backend declarations for algorithms, signature schemes, verification, ticket encryption, and HPKE (`include/picotls/openssl.h:108`, `include/picotls/openssl.h:122`, `include/picotls/openssl.h:159`).
-- PEM/base64 utilities for certificates and keys (`include/picotls/pembase64.h:35`, `include/picotls/pembase64.h:42`).
-- Windows BCrypt backend declarations (`include/picotls/ptlsbcrypt.h:34`).
+### Backend API headers (include/zpicotls/*.h)
+- ASN.1 validation and parsing API used by PEM/key helpers (`include/zpicotls/asn1.h:42`).
+- Certificate compression API with brotli-based decompressor and compressed certificate emitter (`include/zpicotls/certificate_compression.h:43`, `include/zpicotls/certificate_compression.h:48`).
+- FFX format-preserving encryption context and setup helpers (`include/zpicotls/ffx.h:78`, `include/zpicotls/ffx.h:129`, `include/zpicotls/ffx.h:136`).
+- Fusion AES-ECB/AES-GCM and QUIC-LB interfaces, plus CPU capability check (`include/zpicotls/fusion.h:41`, `include/zpicotls/fusion.h:81`, `include/zpicotls/fusion.h:111`).
+- mbedTLS/PSA backend algorithm declarations and key loading hooks (`include/zpicotls/mbedtls.h:34`, `include/zpicotls/mbedtls.h:61`, `include/zpicotls/mbedtls.h:63`).
+- Minicrypto backend declarations for algorithms, key exchange, and PEM key loading (`include/zpicotls/minicrypto.h:35`, `include/zpicotls/minicrypto.h:40`, `include/zpicotls/minicrypto.h:45`, `include/zpicotls/minicrypto.h:73`).
+- OpenSSL backend declarations for algorithms, signature schemes, verification, ticket encryption, and HPKE (`include/zpicotls/openssl.h:108`, `include/zpicotls/openssl.h:122`, `include/zpicotls/openssl.h:159`).
+- PEM/base64 utilities for certificates and keys (`include/zpicotls/pembase64.h:35`, `include/zpicotls/pembase64.h:42`).
+- Windows BCrypt backend declarations (`include/zpicotls/ptlsbcrypt.h:34`).
 
 ### Core TLS engine (lib/picotls.c)
 - Buffer growth and encoding/decoding helpers used across handshake and record processing (`lib/picotls.c:581`, `lib/picotls.c:926`).
@@ -52,7 +52,7 @@ This codebase is a C implementation of the picotls TLS stack. The public API in 
 - mbedTLS signing helper parses PEM/DER and creates a signing callback backed by PSA keys (`lib/mbedtls_sign.c:75`, `lib/mbedtls_sign.c:601`).
 - Fusion backend provides SIMD-accelerated AES-ECB and AES-GCM plus QUIC-LB cipher and CPU feature detection (`lib/fusion.c:401`, `lib/fusion.c:2239`).
 - Windows BCrypt backend provides AES-ECB/CTR/GCM and hash algorithm bindings (`lib/ptlsbcrypt.c:787`).
-- Minicrypto backend wires Cifra primitives and micro-ecc key exchange/signing into picotls algorithm objects (`lib/cifra.c:26`, `lib/cifra/aes128.c:50`, `lib/cifra/aes256.c:55`, `lib/cifra/chacha20.c:100`, `lib/cifra/random.c:112`, `lib/cifra/x25519.c:129`, `lib/uecc.c:180`).
+- Minicrypto backend wires Cifra primitives and micro-ecc key exchange/signing into zpicotls algorithm objects (`lib/cifra.c:26`, `lib/cifra/aes128.c:50`, `lib/cifra/aes256.c:55`, `lib/cifra/chacha20.c:100`, `lib/cifra/random.c:112`, `lib/cifra/x25519.c:129`, `lib/uecc.c:180`).
 
 ### Tests and tools (t/*.c, t/*.h)
 - Shared test vectors, ECH configs, and FFX variant helpers (`t/test.h:23`).
@@ -64,7 +64,7 @@ This codebase is a C implementation of the picotls TLS stack. The public API in 
 - Fusion backend tests for AES-GCM and non-temporal modes (`t/fusion.c:32`).
 - QUIC-LB test vectors (`t/quiclb.c:25`).
 - HPKE test vectors and setup (`t/hpke.c:35`).
-- CLI harness for running picotls over TCP with options for certificates, ECH, PSK, and logging (`t/cli.c:60`).
+- CLI harness for running zpicotls over TCP with options for certificates, ECH, PSK, and logging (`t/cli.c:60`).
 - Benchmark harness for AEAD throughput (`t/ptlsbench.c:67`).
 
 ### Vendored libraries
@@ -174,16 +174,16 @@ micro-ecc provides secp256r1 key generation and ECDSA used by the minicrypto bac
 - `deps/micro-ecc/uECC_vli.h:4` - Representative symbol `_UECC_VLI_H_` in this file.
 - `deps/picotest/picotest.c:31` - Representative symbol `indent` in this file.
 - `deps/picotest/picotest.h:23` - Representative symbol `picotest_h` in this file.
-- `include/picotls.h:1987` - Representative symbol `ptls_log_point_maybe_active` in this file.
-- `include/picotls/asn1.h:18` - Representative symbol `PTLS_ASN1_H` in this file.
-- `include/picotls/certificate_compression.h:23` - Representative symbol `picotls_certificate_compression_h` in this file.
-- `include/picotls/ffx.h:18` - Representative symbol `PTLS_FFX_H` in this file.
-- `include/picotls/fusion.h:23` - Representative symbol `picotls_fusion_h` in this file.
-- `include/picotls/mbedtls.h:23` - Representative symbol `picotls_mbedtls_h` in this file.
-- `include/picotls/minicrypto.h:23` - Representative symbol `picotls_minicrypto_h` in this file.
-- `include/picotls/openssl.h:23` - Representative symbol `picotls_openssl_h` in this file.
-- `include/picotls/pembase64.h:18` - Representative symbol `PTLS_PEMBASE64_H` in this file.
-- `include/picotls/ptlsbcrypt.h:23` - Representative symbol `picotls_bcrypt_h` in this file.
+- `include/zpicotls.h:1987` - Representative symbol `ptls_log_point_maybe_active` in this file.
+- `include/zpicotls/asn1.h:18` - Representative symbol `PTLS_ASN1_H` in this file.
+- `include/zpicotls/certificate_compression.h:23` - Representative symbol `picotls_certificate_compression_h` in this file.
+- `include/zpicotls/ffx.h:18` - Representative symbol `PTLS_FFX_H` in this file.
+- `include/zpicotls/fusion.h:23` - Representative symbol `picotls_fusion_h` in this file.
+- `include/zpicotls/mbedtls.h:23` - Representative symbol `picotls_mbedtls_h` in this file.
+- `include/zpicotls/minicrypto.h:23` - Representative symbol `picotls_minicrypto_h` in this file.
+- `include/zpicotls/openssl.h:23` - Representative symbol `picotls_openssl_h` in this file.
+- `include/zpicotls/pembase64.h:18` - Representative symbol `PTLS_PEMBASE64_H` in this file.
+- `include/zpicotls/ptlsbcrypt.h:23` - Representative symbol `picotls_bcrypt_h` in this file.
 - `lib/asn1.c:46` - Representative symbol `ptls_asn1_print_indent` in this file.
 - `lib/certificate_compression.c:28` - Representative symbol `decompress_certificate` in this file.
 - `lib/chacha20poly1305.h:39` - Representative symbol `chacha20poly1305_write_u64` in this file.
@@ -221,9 +221,9 @@ micro-ecc provides secp256r1 key generation and ECDSA used by the minicrypto bac
 - `t/util.h:52` - Representative symbol `load_certificate_chain` in this file.
 
 ## Architecture Documentation
-The architecture centers on `ptls_context_t` (configuration and callbacks) and `ptls_t` (per-connection state) defined in `include/picotls.h`. The core protocol engine in `lib/picotls.c` consumes the context’s key exchange list and cipher suite list to negotiate algorithms and drive the TLS 1.3/1.2 handshake, emit messages, and manage record protection. Cryptographic operations are abstracted through `ptls_cipher_algorithm_t`, `ptls_aead_algorithm_t`, `ptls_hash_algorithm_t`, and `ptls_key_exchange_algorithm_t`, with concrete implementations supplied by backends in `lib/openssl.c`, `lib/mbedtls.c`, `lib/fusion.c`, `lib/ptlsbcrypt.c`, and the in-tree minicrypto components (`lib/cifra/*`, `lib/uecc.c`).
+The architecture centers on `ptls_context_t` (configuration and callbacks) and `ptls_t` (per-connection state) defined in `include/zpicotls.h`. The core protocol engine in `lib/picotls.c` consumes the context’s key exchange list and cipher suite list to negotiate algorithms and drive the TLS 1.3/1.2 handshake, emit messages, and manage record protection. Cryptographic operations are abstracted through `ptls_cipher_algorithm_t`, `ptls_aead_algorithm_t`, `ptls_hash_algorithm_t`, and `ptls_key_exchange_algorithm_t`, with concrete implementations supplied by backends in `lib/openssl.c`, `lib/mbedtls.c`, `lib/fusion.c`, `lib/ptlsbcrypt.c`, and the in-tree minicrypto components (`lib/cifra/*`, `lib/uecc.c`).
 
-Feature modules plug into the core via callback interfaces: certificate compression exposes `ptls_emit_certificate_t` and `ptls_decompress_certificate_t`, HPKE helpers build on `ptls_hkdf_extract`/`ptls_hkdf_expand` and AEAD creation, and QUIC-LB helpers provide a cipher transform callable from multiple backends. PEM and ASN.1 utilities support key and certificate loading for both tests and runtime tools. Logging is implemented in `lib/picotls.c` and surfaced via log callbacks and helper APIs in `include/picotls.h`, while the CLI (`t/cli.c`) and tests (`t/*.c`) demonstrate composition of contexts, credentials, and handshake properties across backends.
+Feature modules plug into the core via callback interfaces: certificate compression exposes `ptls_emit_certificate_t` and `ptls_decompress_certificate_t`, HPKE helpers build on `ptls_hkdf_extract`/`ptls_hkdf_expand` and AEAD creation, and QUIC-LB helpers provide a cipher transform callable from multiple backends. PEM and ASN.1 utilities support key and certificate loading for both tests and runtime tools. Logging is implemented in `lib/picotls.c` and surfaced via log callbacks and helper APIs in `include/zpicotls.h`, while the CLI (`t/cli.c`) and tests (`t/*.c`) demonstrate composition of contexts, credentials, and handshake properties across backends.
 
 ## Open Questions
 - Behavior of external libraries (OpenSSL, mbedTLS/PSA, brotli, Cifra, micro-ecc) depends on their versions and configuration; this report only reflects their integration points as seen in this code.

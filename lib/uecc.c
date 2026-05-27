@@ -31,8 +31,8 @@
 #include "sha2.h"
 #include "uECC.h"
 #include "uECC_vli.h"
-#include "picotls.h"
-#include "picotls/minicrypto.h"
+#include "zpicotls.h"
+#include "zpicotls/minicrypto.h"
 
 #define TYPE_UNCOMPRESSED_PUBLIC_KEY 4
 

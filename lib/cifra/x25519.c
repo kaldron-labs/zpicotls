@@ -21,8 +21,8 @@
  */
 #include <stdlib.h>
 #include "curve25519.h"
-#include "picotls.h"
-#include "picotls/minicrypto.h"
+#include "zpicotls.h"
+#include "zpicotls/minicrypto.h"
 
 #define X25519_KEY_SIZE 32
 

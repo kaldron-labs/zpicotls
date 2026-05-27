@@ -3,11 +3,11 @@
 #include <stdarg.h>
 #include <openssl/pem.h>
 #include "../picotls/wincompat.h"
-#include "../../include/picotls.h"
-#include "../../include/picotls/openssl.h"
-#include "../../include/picotls/minicrypto.h"
-#include "../../include/picotls/asn1.h"
-#include "../../include/picotls/pembase64.h"
+#include "../../include/zpicotls.h"
+#include "../../include/zpicotls/openssl.h"
+#include "../../include/zpicotls/minicrypto.h"
+#include "../../include/zpicotls/asn1.h"
+#include "../../include/zpicotls/pembase64.h"
 
 #ifdef _WIN32
 #define PICOTLS_CERT_STORE "..\\..\\t\\assets\\test-ca.crt"

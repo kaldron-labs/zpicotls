@@ -22,8 +22,8 @@
 #ifndef test_h
 #define test_h
 
-#include "picotls.h"
-#include "picotls/ffx.h"
+#include "zpicotls.h"
+#include "zpicotls/ffx.h"
 
 /* raw private key and certificate using secp256v1 */
 #define SECP256R1_PRIVATE_KEY                                                                                                      \

@@ -1,8 +1,8 @@
 
 
-Compiling PicoTLS with Visual Studio 2017
+Compiling zpicotls with Visual Studio 2017
 
-The source contains a Visual Studio 2017 solution (picotls/picotlsvs/picotlsvs.sln)
+The source contains a Visual Studio 2017 solution (zpicotls/picotlsvs/picotlsvs.sln)
 which itself contains 10 projects, including:
 
 * picotls-core, building the core library
@@ -16,7 +16,7 @@ which itself contains 10 projects, including:
   execute the OpenSSL tests;
 
 * And, an example project, picotlsvs.exe, which will perform a TLS exchange
-  in memory, and demonstrate how to use PicoTLS in windows.
+  in memory, and demonstrate how to use zpicotls in windows.
 
 The example code has a dependency on OpenSSL. When building the 32 bit
 projects (WIN32) it expects to find:

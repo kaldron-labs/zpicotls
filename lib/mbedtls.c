@@ -30,7 +30,7 @@
 #include <psa/crypto.h>
 #include <mbedtls/chacha20.h>
 #include <mbedtls/ecdh.h>
-#include "picotls.h"
+#include "zpicotls.h"
 
 #define PSA_FUNC_FAILED(fn, ret)                                                                                                   \
     do {                                                                                                                           \

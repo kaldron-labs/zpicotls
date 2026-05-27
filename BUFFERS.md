@@ -9,7 +9,7 @@
 - Wrapper stack:
 1. `ptls_buffer_reserve` -> `ptls_buffer_reserve_aligned` (`lib/picotls.c:615`, `lib/picotls.c:617`).
 2. `ptls_buffer__do_pushv` -> `ptls_buffer_reserve` (`lib/picotls.c:655`, `lib/picotls.c:661`).
-3. `ptls_buffer_push*` macros -> `ptls_buffer__do_pushv` (`include/picotls.h:1234`, `include/picotls.h:1240`, `include/picotls.h:1236`, `include/picotls.h:1242`).
+3. `ptls_buffer_push*` macros -> `ptls_buffer__do_pushv` (`include/zpicotls.h:1234`, `include/zpicotls.h:1240`, `include/zpicotls.h:1236`, `include/zpicotls.h:1242`).
 
 ## Shared receive-side allocation paths (used by multiple RX categories)
 - Incremental record reassembly (slow path): `lib/picotls.c:5096`, `lib/picotls.c:5112`.
@@ -123,7 +123,7 @@ Indirect push-based allocation sites:
   - `lib/picotls.c:5209`, `lib/picotls.c:5210`, `lib/picotls.c:5211`, `lib/picotls.c:5212`, `lib/picotls.c:5213`, `lib/picotls.c:5214`, `lib/picotls.c:5215`, `lib/picotls.c:5217`, `lib/picotls.c:5219`, `lib/picotls.c:5220`, `lib/picotls.c:5221`, `lib/picotls.c:5222`, `lib/picotls.c:5235`, `lib/picotls.c:5236`, `lib/picotls.c:5237`, `lib/picotls.c:5239`, `lib/picotls.c:5240`, `lib/picotls.c:5241`, `lib/picotls.c:5242`, `lib/picotls.c:5304`, `lib/picotls.c:5305`, `lib/picotls.c:5306`, `lib/picotls.c:5307`, `lib/picotls.c:6710`, `lib/picotls.c:6711`, `lib/picotls.c:6712`, `lib/picotls.c:6713`, `lib/picotls.c:6714`, `lib/picotls.c:6715`, `lib/picotls.c:6717`, `lib/picotls.c:6718`, `lib/picotls.c:6721`, `lib/picotls.c:6722`, `lib/picotls.c:6723`.
 
 ## Header/API references relevant to all categories
-- Reserve API declarations: `include/picotls.h:1208`, `include/picotls.h:1212`.
+- Reserve API declarations: `include/zpicotls.h:1208`, `include/zpicotls.h:1212`.
 - Generic push/reserve macro definitions:
-  - `include/picotls.h:1234`, `include/picotls.h:1240`, `include/picotls.h:1271`, `include/picotls.h:1273`, `include/picotls.h:1279`, `include/picotls.h:1318`, `include/picotls.h:1329`.
+  - `include/zpicotls.h:1234`, `include/zpicotls.h:1240`, `include/zpicotls.h:1271`, `include/zpicotls.h:1273`, `include/zpicotls.h:1279`, `include/zpicotls.h:1318`, `include/zpicotls.h:1329`.
 - No direct `ptls_buffer_reserve*` call-sites exist under `src/`.

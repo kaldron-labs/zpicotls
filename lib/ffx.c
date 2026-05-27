@@ -21,9 +21,9 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
-#include "picotls.h"
-#include "picotls/minicrypto.h"
-#include "picotls/ffx.h"
+#include "zpicotls.h"
+#include "zpicotls/minicrypto.h"
+#include "zpicotls/ffx.h"
 
 static void ffx_dispose(ptls_cipher_context_t *_ctx);
 static void ffx_encrypt(ptls_cipher_context_t *_ctx, void *output, const void *input, size_t len);

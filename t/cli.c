@@ -47,10 +47,10 @@
 #if PICOTLS_USE_BROTLI
 #include "brotli/decode.h"
 #endif
-#include "picotls.h"
-#include "picotls/openssl.h"
+#include "zpicotls.h"
+#include "zpicotls/openssl.h"
 #if PICOTLS_USE_BROTLI
-#include "picotls/certificate_compression.h"
+#include "zpicotls/certificate_compression.h"
 #endif
 #include "util.h"
 

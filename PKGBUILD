@@ -2,11 +2,11 @@
 
 options=(!strip debug)
 
-pkgname=picotls
+pkgname=zpicotls
 pkgver=1.3
 pkgrel=1
-pkgdesc='picotls'
-url='https://github.com/kaldron-labs/picotls'
+pkgdesc='zpicotls'
+url='https://github.com/kaldron-labs/zpicotls'
 license=('MIT')
 arch=('x86_64')
 depends=('openssl' 'brotli')

@@ -44,7 +44,7 @@
 #ifdef __APPLE__
 #include <AvailabilityMacros.h>
 #endif
-#include "picotls.h"
+#include "zpicotls.h"
 #if PICOTLS_USE_DTRACE
 #include "picotls-probes.h"
 #endif

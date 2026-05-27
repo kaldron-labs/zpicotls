@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `include/` holds public headers (`picotls.h`, `include/picotls/*.h`).
+- `include/` holds public headers (`zpicotls.h`, `include/zpicotls/*.h`).
 - `lib/` contains the core C implementation and crypto backends (OpenSSL, mbedtls, minicrypto, fusion).
 - `src/` includes auxiliary source files (for example, ESNI/ECH helpers).
 - `t/` contains tests, including Perl end-to-end scripts (`t/*.t`) and C test sources/assets.

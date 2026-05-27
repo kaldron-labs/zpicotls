@@ -46,8 +46,8 @@
 #include <resolv.h>
 #endif
 #include <openssl/pem.h>
-#include "picotls/pembase64.h"
-#include "picotls/openssl.h"
+#include "zpicotls/pembase64.h"
+#include "zpicotls/openssl.h"
 
 static inline void load_certificate_chain(ptls_context_t *ctx, const char *fn)
 {

@@ -16,8 +16,8 @@
 #include <openssl/engine.h>
 #include <openssl/pem.h>
 
-#include "picotls.h"
-#include "picotls/openssl.h"
+#include "zpicotls.h"
+#include "zpicotls/openssl.h"
 #include "util.h"
 
 void deterministic_random_bytes(void *buf, size_t len)

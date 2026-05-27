@@ -1,4 +1,4 @@
-picotls
+zpicotls
 ===
 
 This is a maintained fork of Picotls, with intentional breaking API changes for improved buffer management, zero-copy buffer move across API boundaries, and in-place encrypt/decrypt. The fork is periodically synced to merge in upstream commits.
@@ -7,7 +7,7 @@ Key changes:
 - Buffer API overhaul: ptls_buffer_t now tracks origin and tx direction, and buffer
   initialization/reserve APIs changed to carry RX/TX intent. Public additions include
   ptls_buffer_init_rx, ptls_buffer_init_tx, overrideable ptls_buffer_alloc, and ptls_buffer_free
-  in include/picotls.h:1204. Core paths now assert/check buffer direction in send/receive/
+  in include/zpicotls.h:1204. Core paths now assert/check buffer direction in send/receive/
   export/handshake code in lib/picotls.c:573.
 - Custom buffer allocation hooks: buffer growth is routed through overridable allocator/free
   callbacks, preserving alignment and direction metadata. Tests cover allocation, alignment,
@@ -18,17 +18,17 @@ Key changes:
   regression tests were added in t/fusion.c:490.
 - Build/install/package work: CMake now declares version 1.3, includes install rules, installs
   backend-specific headers/libraries, and generates pkg-config files for core/minicrypto/fusion/
-  openssl/mbedtls in CMakeLists.txt:4 and cmake/picotls.pc.in. A local Arch/MSYS-style
+  openssl/mbedtls in CMakeLists.txt:4 and cmake/zpicotls.pc.in. A local Arch/MSYS-style
   PKGBUILD:1 was added.
 - Local docs and AI tooling: added BUFFERS.md, CODEBASE.md, AGENTS.md, plan.md, review.md,
-  source.yaml, .ctags.d/picotls.ctags, and gtags.conf.
+  source.yaml, .ctags.d/zpicotls.ctags, and gtags.conf.
 - Smaller compatibility changes: assorted call sites were updated for the new buffer API across
   HPKE, OpenSSL ticket encryption/decryption, fuzzers, tests, and backend code. The fork also
   deletes the picotls-esni target via its older PR branch history.
 
-[![CI](https://github.com/h2o/picotls/actions/workflows/ci.yml/badge.svg)](https://github.com/h2o/picotls/actions/workflows/ci.yml)
+[![CI](https://github.com/kaldron-labs/zpicotls/actions/workflows/ci.yml/badge.svg)](https://github.com/kaldron-labs/zpicotls/actions/workflows/ci.yml)
 
-Picotls is a [TLS 1.3 (RFC 8446)](https://tools.ietf.org/html/rfc8446) protocol stack written in C, with the following features:
+zpicotls is a maintained fork of Picotls, a [TLS 1.3 (RFC 8446)](https://tools.ietf.org/html/rfc8446) protocol stack written in C, with the following features:
 * support for four crypto engines
   * "OpenSSL" backend using libcrypto for crypto and X.509 operations
   * "minicrypto" backend using [cifra](https://github.com/ctz/cifra) for most crypto and [micro-ecc](https://github.com/kmackay/micro-ecc) for secp256r1
@@ -44,9 +44,9 @@ Picotls is a [TLS 1.3 (RFC 8446)](https://tools.ietf.org/html/rfc8446) protocol 
   * Format Preserving Encryption ([NIST SP 800-38G](https://csrc.nist.gov/pubs/sp/800/38/g/upd1/final))
   * [QUIC Load Balancer CID encryption](https://www.ietf.org/archive/id/draft-ietf-quic-load-balancers-21.html#name-general-case-four-pass-encr)
 
-picotls is designed to be fast, tiny, and low-latency, with the primary user being the [H2O HTTP server](https://h2o.examp1e.net) for serving HTTP/1, HTTP/2, and HTTP/3 over QUIC.
+zpicotls is designed to be fast, tiny, and low-latency, with the primary user being the [H2O HTTP server](https://h2o.examp1e.net) for serving HTTP/1, HTTP/2, and HTTP/3 over QUIC.
 
-The TLS protocol implementation of picotls is licensed under the MIT license.
+The TLS protocol implementation of zpicotls is licensed under the MIT license.
 
 License and the cryptographic algorithms supported by the crypto bindings are as follows:
 
@@ -57,10 +57,10 @@ License and the cryptographic algorithms supported by the crypto bindings are as
 
 Note 1: Minicrypto binding is capable of signing a handshake using the certificate's key, but cannot verify a signature sent by the peer.
 
-Building picotls
+Building zpicotls
 ---
 
-If you have cloned picotls from git then ensure that you have initialised the submodules:
+If you have cloned zpicotls from git then ensure that you have initialised the submodules:
 ```
 % git submodule init
 % git submodule update
@@ -73,12 +73,12 @@ Build using cmake:
 % make check
 ```
 
-A dedicated documentation for using picotls with Visual Studio can be found in [WindowsPort.md](WindowsPort.md).
+A dedicated documentation for using zpicotls with Visual Studio can be found in [WindowsPort.md](WindowsPort.md).
 
 Developer documentation
 ---
 
-Developer documentation should be available on [the wiki](https://github.com/h2o/picotls/wiki).
+Developer documentation should be available on [the wiki](https://github.com/kaldron-labs/zpicotls/wiki).
 
 Using the cli command
 ---

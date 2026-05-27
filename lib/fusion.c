@@ -45,8 +45,8 @@
 #include <tmmintrin.h>
 #include <nmmintrin.h>
 #include <wmmintrin.h>
-#include "picotls.h"
-#include "picotls/fusion.h"
+#include "zpicotls.h"
+#include "zpicotls/fusion.h"
 #include "./quiclb-impl.h"
 
 #if defined(__clang__)

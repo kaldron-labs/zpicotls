@@ -47,8 +47,8 @@
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
 #include <openssl/x509_vfy.h>
-#include "picotls.h"
-#include "picotls/openssl.h"
+#include "zpicotls.h"
+#include "zpicotls/openssl.h"
 #ifdef OPENSSL_IS_BORINGSSL
 #include "./chacha20poly1305.h"
 #if defined(OPENSSL_IS_BORINGSSL) && PTLS_OPENSSL_HAVE_X25519MLKEM768

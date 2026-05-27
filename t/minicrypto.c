@@ -28,7 +28,7 @@
 #include "../deps/picotest/picotest.h"
 #include "../lib/cifra.c"
 #include "../lib/uecc.c"
-#include "picotls/asn1.h"
+#include "zpicotls/asn1.h"
 #include "test.h"
 
 static void test_secp256r1_key_exchange(void)

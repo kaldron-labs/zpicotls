@@ -35,9 +35,9 @@
 #if !defined(LIBRESSL_VERSION_NUMBER) && OPENSSL_VERSION_NUMBER >= 0x30000000L
 #include <openssl/provider.h>
 #endif
-#include "picotls.h"
-#include "picotls/minicrypto.h"
-#include "picotls/openssl.h"
+#include "zpicotls.h"
+#include "zpicotls/minicrypto.h"
+#include "zpicotls/openssl.h"
 #if PTLS_OPENSSL_HAVE_ASYNC && PTLS_OPENSSL_HAVE_X25519 && !defined(_WIN32)
 #include <sys/select.h>
 #include <sys/time.h>

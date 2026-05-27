@@ -38,7 +38,7 @@ void ptlc_bcrypt_dispose()
 
 #include "wincompat.h"
 #include <bcrypt.h>
-#include "picotls.h"
+#include "zpicotls.h"
 
 /**
  * Initialize the brcrypt libraries, creates the

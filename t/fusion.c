@@ -23,8 +23,8 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
-#include "picotls/fusion.h"
-#include "picotls/minicrypto.h"
+#include "zpicotls/fusion.h"
+#include "zpicotls/minicrypto.h"
 #include "../deps/picotest/picotest.h"
 #include "../lib/fusion.c"
 #include "test.h"

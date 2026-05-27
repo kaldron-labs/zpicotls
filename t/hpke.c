@@ -24,7 +24,7 @@
 #endif
 #include <assert.h>
 #include <string.h>
-#include "picotls.h"
+#include "zpicotls.h"
 #include "../deps/picotest/picotest.h"
 #include "test.h"
 #include "../lib/hpke.c"

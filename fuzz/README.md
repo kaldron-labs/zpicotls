@@ -1,6 +1,6 @@
 # Fuzzing
 
-This directory contains code and test data for fuzz testing picotls with LLVM's [LibFuzzer](http://libfuzzer.info). 
+This directory contains code and test data for fuzz testing zpicotls with LLVM's [LibFuzzer](http://libfuzzer.info). 
 
 ## Building the test drivers
 

@@ -1,7 +1,7 @@
 CMAKE_MINIMUM_REQUIRED(VERSION 2.8.12...4.0)
 CMAKE_POLICY(SET CMP0003 NEW)
 
-PROJECT(picotls VERSION 1.3)
+PROJECT(zpicotls VERSION 1.3)
 
 INCLUDE(GNUInstallDirs)
 
@@ -84,15 +84,15 @@ IF (BROTLI_DEC_FOUND AND BROTLI_ENC_FOUND)
     LIST(APPEND CORE_EXTRA_LIBS_DIRS ${BROTLI_DEC_LIBRARY_DIRS} ${BROTLI_ENC_LIBRARY_DIRS})
 ENDIF ()
 
-ADD_LIBRARY(picotls-core ${CORE_FILES})
-TARGET_LINK_LIBRARIES(picotls-core ${CORE_EXTRA_LIBS})
-TARGET_LINK_DIRECTORIES(picotls-core PUBLIC ${CORE_EXTRA_LIBS_DIRS})
+ADD_LIBRARY(zpicotls-core ${CORE_FILES})
+TARGET_LINK_LIBRARIES(zpicotls-core ${CORE_EXTRA_LIBS})
+TARGET_LINK_DIRECTORIES(zpicotls-core PUBLIC ${CORE_EXTRA_LIBS_DIRS})
 
 IF (WITH_AEGIS)
     SET(MINICRYPTO_AEGIS_FILES lib/cifra/libaegis.c)
 ENDIF ()
 
-ADD_LIBRARY(picotls-minicrypto
+ADD_LIBRARY(zpicotls-minicrypto
     ${MINICRYPTO_LIBRARY_FILES}
     ${MINICRYPTO_AEGIS_FILES}
     lib/cifra.c
@@ -105,7 +105,7 @@ ADD_LIBRARY(picotls-minicrypto
     lib/uecc.c
     lib/asn1.c
     lib/ffx.c)
-TARGET_LINK_LIBRARIES(picotls-minicrypto picotls-core)
+TARGET_LINK_LIBRARIES(zpicotls-minicrypto zpicotls-core)
 ADD_EXECUTABLE(test-minicrypto.t
     ${MINICRYPTO_LIBRARY_FILES}
     ${MINICRYPTO_AEGIS_FILES}
@@ -124,7 +124,7 @@ SET(TEST_EXES test-minicrypto.t)
 
 
 SET(PTLSBENCH_LIBS
-    picotls-minicrypto picotls-core)
+    zpicotls-minicrypto zpicotls-core)
 
 IF (WITH_AEGIS)
   FIND_PACKAGE(aegis)
@@ -149,11 +149,11 @@ BORINGSSL_ADJUST()
 IF (OPENSSL_FOUND AND NOT (OPENSSL_VERSION VERSION_LESS "1.0.1"))
     MESSAGE(STATUS "  Enabling OpenSSL support")
     INCLUDE_DIRECTORIES(${OPENSSL_INCLUDE_DIR})
-    ADD_LIBRARY(picotls-openssl lib/openssl.c)
-    TARGET_LINK_LIBRARIES(picotls-openssl ${OPENSSL_CRYPTO_LIBRARIES} ${AEGIS_LIBRARIES} picotls-core ${CMAKE_DL_LIBS})
+    ADD_LIBRARY(zpicotls-openssl lib/openssl.c)
+    TARGET_LINK_LIBRARIES(zpicotls-openssl ${OPENSSL_CRYPTO_LIBRARIES} ${AEGIS_LIBRARIES} zpicotls-core ${CMAKE_DL_LIBS})
     IF (NOT WIN32)
 	ADD_EXECUTABLE(cli t/cli.c lib/pembase64.c)
-	TARGET_LINK_LIBRARIES(cli picotls-openssl picotls-core)
+	TARGET_LINK_LIBRARIES(cli zpicotls-openssl zpicotls-core)
     ENDIF ()
 
     ADD_EXECUTABLE(test-openssl.t
@@ -175,7 +175,7 @@ IF (OPENSSL_FOUND AND NOT (OPENSSL_VERSION VERSION_LESS "1.0.1"))
     SET_TARGET_PROPERTIES(test-openssl.t PROPERTIES COMPILE_FLAGS "-DPTLS_MEMORY_DEBUG=1")
     TARGET_LINK_LIBRARIES(test-openssl.t ${OPENSSL_CRYPTO_LIBRARIES} ${AEGIS_LIBRARIES} ${CMAKE_DL_LIBS})
 
-    LIST(APPEND PTLSBENCH_LIBS picotls-openssl ${OPENSSL_CRYPTO_LIBRARIES} ${AEGIS_LIBRARIES} ${CMAKE_DL_LIBS})
+    LIST(APPEND PTLSBENCH_LIBS zpicotls-openssl ${OPENSSL_CRYPTO_LIBRARIES} ${AEGIS_LIBRARIES} ${CMAKE_DL_LIBS})
 
     SET(TEST_EXES ${TEST_EXES} test-openssl.t)
 ELSE ()
@@ -183,15 +183,15 @@ ELSE ()
 ENDIF ()
 
 IF (WITH_FUSION)
-    ADD_LIBRARY(picotls-fusion lib/fusion.c)
-    SET_TARGET_PROPERTIES(picotls-fusion PROPERTIES COMPILE_FLAGS "-mavx2 -maes -mpclmul -mvaes -mvpclmulqdq")
-    TARGET_LINK_LIBRARIES(picotls-fusion picotls-core)
+    ADD_LIBRARY(zpicotls-fusion lib/fusion.c)
+    SET_TARGET_PROPERTIES(zpicotls-fusion PROPERTIES COMPILE_FLAGS "-mavx2 -maes -mpclmul -mvaes -mvpclmulqdq")
+    TARGET_LINK_LIBRARIES(zpicotls-fusion zpicotls-core)
     ADD_EXECUTABLE(test-fusion.t
         deps/picotest/picotest.c
         lib/picotls.c
         t/fusion.c
         t/quiclb.c)
-    TARGET_LINK_LIBRARIES(test-fusion.t picotls-minicrypto)
+    TARGET_LINK_LIBRARIES(test-fusion.t zpicotls-minicrypto)
     SET_TARGET_PROPERTIES(test-fusion.t PROPERTIES COMPILE_FLAGS "-mavx2 -maes -mpclmul -mvaes -mvpclmulqdq")
     IF (WITH_DTRACE)
         ADD_DEPENDENCIES(test-fusion.t generate-picotls-probes)
@@ -199,7 +199,7 @@ IF (WITH_FUSION)
     SET(TEST_EXES ${TEST_EXES} test-fusion.t)
 
     SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DPTLS_HAVE_FUSION=1")
-    LIST(APPEND PTLSBENCH_LIBS picotls-fusion)
+    LIST(APPEND PTLSBENCH_LIBS zpicotls-fusion)
 ENDIF ()
 
 IF (WITH_MBEDTLS)
@@ -210,16 +210,16 @@ IF (WITH_MBEDTLS)
     message(STATUS "mbedtls/include: ${MBEDTLS_INCLUDE_DIRS}")
     message(STATUS "mbedtls libraries: ${MBEDTLS_LIBRARIES}")
     INCLUDE_DIRECTORIES(${MBEDTLS_INCLUDE_DIRS})
-    ADD_LIBRARY(picotls-mbedtls lib/mbedtls.c lib/mbedtls_sign.c)
+    ADD_LIBRARY(zpicotls-mbedtls lib/mbedtls.c lib/mbedtls_sign.c)
     ADD_EXECUTABLE(test-mbedtls.t
         deps/picotest/picotest.c
         ${CORE_TEST_FILES}
         t/mbedtls.c)
     TARGET_LINK_LIBRARIES(test-mbedtls.t
-        picotls-minicrypto picotls-mbedtls
+        zpicotls-minicrypto zpicotls-mbedtls
         ${MBEDTLS_LIBRARIES})
     SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DPTLS_HAVE_MBEDTLS=1")
-    LIST(APPEND PTLSBENCH_LIBS picotls-mbedtls ${MBEDTLS_LIBRARIES})
+    LIST(APPEND PTLSBENCH_LIBS zpicotls-mbedtls ${MBEDTLS_LIBRARIES})
 ENDIF ()
 
 ADD_EXECUTABLE(ptlsbench t/ptlsbench.c)
@@ -293,50 +293,50 @@ IF (BUILD_FUZZER)
             LINK_FLAGS "-fsanitize=fuzzer")
     ENDIF (OSS_FUZZ)
 
-    TARGET_LINK_LIBRARIES(fuzz-asn1 picotls-minicrypto picotls-core picotls-openssl ${OPENSSL_CRYPTO_LIBRARIES} ${AEGIS_LIBRARIES} ${LIB_FUZZER})
-    TARGET_LINK_LIBRARIES(fuzz-server-hello picotls-core picotls-openssl ${OPENSSL_CRYPTO_LIBRARIES} ${AEGIS_LIBRARIES} ${LIB_FUZZER})
-    TARGET_LINK_LIBRARIES(fuzz-client-hello picotls-core picotls-openssl ${OPENSSL_CRYPTO_LIBRARIES} ${AEGIS_LIBRARIES} ${LIB_FUZZER})
+    TARGET_LINK_LIBRARIES(fuzz-asn1 zpicotls-minicrypto zpicotls-core zpicotls-openssl ${OPENSSL_CRYPTO_LIBRARIES} ${AEGIS_LIBRARIES} ${LIB_FUZZER})
+    TARGET_LINK_LIBRARIES(fuzz-server-hello zpicotls-core zpicotls-openssl ${OPENSSL_CRYPTO_LIBRARIES} ${AEGIS_LIBRARIES} ${LIB_FUZZER})
+    TARGET_LINK_LIBRARIES(fuzz-client-hello zpicotls-core zpicotls-openssl ${OPENSSL_CRYPTO_LIBRARIES} ${AEGIS_LIBRARIES} ${LIB_FUZZER})
 
 ENDIF()
 
-install(FILES include/picotls.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-install(DIRECTORY include/picotls DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+install(FILES include/zpicotls.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(DIRECTORY include/zpicotls DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
         PATTERN "mbedtls.h" EXCLUDE
         PATTERN "openssl.h" EXCLUDE
         PATTERN "fusion.h" EXCLUDE)
 
-install(TARGETS picotls-core
+install(TARGETS zpicotls-core
             ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
             RUNTIME DESTINATION ${CMAKE_INSTALL_LIBDIR}
             LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
 
-install(TARGETS picotls-minicrypto
+install(TARGETS zpicotls-minicrypto
             ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
             RUNTIME DESTINATION ${CMAKE_INSTALL_LIBDIR}
             LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
 
-if (TARGET picotls-fusion)
-    install(TARGETS picotls-fusion
+if (TARGET zpicotls-fusion)
+    install(TARGETS zpicotls-fusion
             ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
             RUNTIME DESTINATION ${CMAKE_INSTALL_LIBDIR}
             LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
-    install(FILES include/picotls/fusion.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/picotls)
+    install(FILES include/zpicotls/fusion.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/zpicotls)
 endif()
 
-if (TARGET picotls-openssl)
-    install(TARGETS picotls-openssl
+if (TARGET zpicotls-openssl)
+    install(TARGETS zpicotls-openssl
             ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
             RUNTIME DESTINATION ${CMAKE_INSTALL_LIBDIR}
             LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
-    install(FILES include/picotls/openssl.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/picotls)
+    install(FILES include/zpicotls/openssl.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/zpicotls)
 endif()
 
-if (TARGET picotls-mbedtls)
-    install(TARGETS picotls-mbedtls
+if (TARGET zpicotls-mbedtls)
+    install(TARGETS zpicotls-mbedtls
             ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
             RUNTIME DESTINATION ${CMAKE_INSTALL_LIBDIR}
             LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
-    install(FILES include/picotls/mbedtls.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/picotls)
+    install(FILES include/zpicotls/mbedtls.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/zpicotls)
 endif()
 
 set(PICOTLS_PKGCONFIG_DIR "${CMAKE_INSTALL_LIBDIR}/pkgconfig")
@@ -371,29 +371,29 @@ function(install_pkgconfig name description libs requires requires_private libs_
     endif()
     set(PICOTLS_PC_VERSION "${PICOTLS_PKGCONFIG_VERSION}")
 
-    configure_file(cmake/picotls.pc.in "${CMAKE_CURRENT_BINARY_DIR}/${name}.pc" @ONLY)
+    configure_file(cmake/zpicotls.pc.in "${CMAKE_CURRENT_BINARY_DIR}/${name}.pc" @ONLY)
     install(FILES "${CMAKE_CURRENT_BINARY_DIR}/${name}.pc" DESTINATION "${PICOTLS_PKGCONFIG_DIR}")
 endfunction()
 
-set(PICOTLS_CORE_LIBS "-lpicotls-core")
+set(PICOTLS_CORE_LIBS "-lzpicotls-core")
 set(PICOTLS_CORE_REQUIRES "")
 set(PICOTLS_CORE_REQUIRES_PRIVATE "")
 set(PICOTLS_CORE_LIBS_PRIVATE "")
 if (BROTLI_DEC_FOUND AND BROTLI_ENC_FOUND)
     set(PICOTLS_CORE_REQUIRES_PRIVATE "libbrotlidec libbrotlienc")
 endif()
-install_pkgconfig("picotls-core" "picotls core TLS library" "${PICOTLS_CORE_LIBS}"
+install_pkgconfig("zpicotls-core" "zpicotls core TLS library" "${PICOTLS_CORE_LIBS}"
     "${PICOTLS_CORE_REQUIRES}" "${PICOTLS_CORE_REQUIRES_PRIVATE}" "${PICOTLS_CORE_LIBS_PRIVATE}")
 
-install_pkgconfig("picotls-minicrypto" "picotls minicrypto backend" "-lpicotls-minicrypto"
-    "picotls-core" "" "")
+install_pkgconfig("zpicotls-minicrypto" "zpicotls minicrypto backend" "-lzpicotls-minicrypto"
+    "zpicotls-core" "" "")
 
-if (TARGET picotls-fusion)
-    install_pkgconfig("picotls-fusion" "picotls fusion AES-GCM engine" "-lpicotls-fusion"
-        "picotls-core" "" "")
+if (TARGET zpicotls-fusion)
+    install_pkgconfig("zpicotls-fusion" "zpicotls fusion AES-GCM engine" "-lzpicotls-fusion"
+        "zpicotls-core" "" "")
 endif()
 
-if (TARGET picotls-openssl)
+if (TARGET zpicotls-openssl)
     set(PICOTLS_OPENSSL_LIBS_PRIVATE ${AEGIS_LIBRARIES})
     foreach(lib ${CMAKE_DL_LIBS})
         if (lib MATCHES "^-")
@@ -402,11 +402,11 @@ if (TARGET picotls-openssl)
             list(APPEND PICOTLS_OPENSSL_LIBS_PRIVATE "-l${lib}")
         endif()
     endforeach()
-    install_pkgconfig("picotls-openssl" "picotls OpenSSL backend" "-lpicotls-openssl"
-        "picotls-core openssl" "" "${PICOTLS_OPENSSL_LIBS_PRIVATE}")
+    install_pkgconfig("zpicotls-openssl" "zpicotls OpenSSL backend" "-lzpicotls-openssl"
+        "zpicotls-core openssl" "" "${PICOTLS_OPENSSL_LIBS_PRIVATE}")
 endif()
 
-if (TARGET picotls-mbedtls)
-    install_pkgconfig("picotls-mbedtls" "picotls mbedtls backend" "-lpicotls-mbedtls"
-        "picotls-core mbedtls" "" "${MBEDTLS_LIBRARIES}")
+if (TARGET zpicotls-mbedtls)
+    install_pkgconfig("zpicotls-mbedtls" "zpicotls mbedtls backend" "-lzpicotls-mbedtls"
+        "zpicotls-core mbedtls" "" "${MBEDTLS_LIBRARIES}")
 endif()

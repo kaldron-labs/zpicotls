@@ -24,8 +24,8 @@
 #include "aes.h"
 #include "modes.h"
 #include "sha2.h"
-#include "picotls.h"
-#include "picotls/minicrypto.h"
+#include "zpicotls.h"
+#include "zpicotls/minicrypto.h"
 
 struct aesecb_context_t {
     ptls_cipher_context_t super;

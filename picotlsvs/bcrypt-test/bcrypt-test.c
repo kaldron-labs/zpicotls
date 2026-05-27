@@ -3,8 +3,8 @@
 #include <wincompat.h>
 #include <bcrypt.h>
 #include <stdio.h>
-#include "picotls/ptlsbcrypt.h"
-#include "picotls/minicrypto.h"
+#include "zpicotls/ptlsbcrypt.h"
+#include "zpicotls/minicrypto.h"
 
 int KeyInit(BCRYPT_KEY_HANDLE *hKey, wchar_t *name, wchar_t *chain_mode, size_t chain_mode_sz, const BYTE *proposedKey,
             DWORD proposedKeyLength, BYTE **ko, ULONG *ko_length)

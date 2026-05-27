@@ -20,7 +20,7 @@
  * IN THE SOFTWARE.
  */
 
-#include "picotls/minicrypto.h"
+#include "zpicotls/minicrypto.h"
 #include "../libaegis.h"
 
 ptls_aead_algorithm_t ptls_minicrypto_aegis128l = {"AEGIS-128L",

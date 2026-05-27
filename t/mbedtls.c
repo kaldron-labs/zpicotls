@@ -28,9 +28,9 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <picotls.h>
-#include "picotls/mbedtls.h"
-#include "picotls/minicrypto.h"
+#include <zpicotls.h>
+#include "zpicotls/mbedtls.h"
+#include "zpicotls/minicrypto.h"
 #include "../deps/picotest/picotest.h"
 #include "test.h"
 
