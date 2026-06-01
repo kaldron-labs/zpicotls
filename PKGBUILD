@@ -3,7 +3,7 @@
 options=(!strip debug)
 
 pkgname=zpicotls
-pkgver=1.3
+pkgver=1.4
 pkgrel=1
 pkgdesc='zpicotls'
 url='https://github.com/kaldron-labs/zpicotls'
