@@ -605,6 +605,126 @@ static void test_deterministic_multivec(ptls_aead_algorithm_t *encryptor, ptls_a
     subtest("multivec-cases", test_deterministic_multivec_all);
 }
 
+enum encrypt_v_s_shape {
+    ENCRYPT_V_S_EMPTY,
+    ENCRYPT_V_S_ONE,
+    ENCRYPT_V_S_MULTI_ZERO
+};
+
+static uint8_t *get_output_for_aead(ptls_aead_algorithm_t *algo, uint8_t *buf)
+{
+    if (!algo->non_temporal)
+        return buf;
+
+    uintptr_t align = (uintptr_t)1 << algo->align_bits;
+    return (uint8_t *)(((uintptr_t)buf + align - 1) & ~(align - 1));
+}
+
+static void test_encrypt_v_s_one(ptls_aead_algorithm_t *encryptor, ptls_aead_algorithm_t *decryptor, enum encrypt_v_s_shape shape,
+                                 int use_supp, size_t sample_off)
+{
+    uint8_t key[32], iv[PTLS_AESGCM_IV_SIZE], hp_key[32], aad[29], plaintext[128], plaintext_copy[128], decrypted[128];
+    uint8_t output_store[sizeof(plaintext) + PTLS_AESGCM_TAG_SIZE + 128], ref_store[sizeof(plaintext) + PTLS_AESGCM_TAG_SIZE + 128];
+    uint8_t *output = get_output_for_aead(encryptor, output_store), *ref_output = get_output_for_aead(encryptor, ref_store);
+    ptls_iovec_t input[4] = {{0}}, input_copy[4] = {{0}}, *inputp = input;
+    size_t textlen = shape == ENCRYPT_V_S_EMPTY ? 0 : 97, incnt = 0, aadlen = sizeof(aad), outlen = textlen + encryptor->tag_size;
+    uint64_t seq = 12345;
+
+    fill_deterministic_bytes(key, sizeof(key), 31);
+    fill_deterministic_bytes(iv, sizeof(iv), 32);
+    fill_deterministic_bytes(hp_key, sizeof(hp_key), 33);
+    fill_deterministic_bytes(aad, sizeof(aad), 34);
+    fill_deterministic_bytes(plaintext, sizeof(plaintext), 35);
+    memcpy(plaintext_copy, plaintext, sizeof(plaintext));
+    memset(output_store, 0xa5, sizeof(output_store));
+    memset(ref_store, 0x5a, sizeof(ref_store));
+    memset(decrypted, 0xcc, sizeof(decrypted));
+
+    switch (shape) {
+    case ENCRYPT_V_S_EMPTY:
+        inputp = NULL;
+        break;
+    case ENCRYPT_V_S_ONE:
+        input[0] = ptls_iovec_init(plaintext, textlen);
+        incnt = 1;
+        break;
+    case ENCRYPT_V_S_MULTI_ZERO:
+        input[0] = ptls_iovec_init(plaintext, 13);
+        input[1] = ptls_iovec_init(plaintext + 13, 0);
+        input[2] = ptls_iovec_init(plaintext + 13, 29);
+        input[3] = ptls_iovec_init(plaintext + 42, textlen - 42);
+        incnt = 4;
+        break;
+    }
+    memcpy(input_copy, input, sizeof(input));
+    ok(sample_off + sizeof(((ptls_aead_supplementary_encryption_t *)NULL)->output) <= outlen);
+
+    ptls_aead_context_t *enc = ptls_aead_new_direct(encryptor, 1, key, iv),
+                        *enc_dec = ptls_aead_new_direct(encryptor, 0, key, iv),
+                        *ref = ptls_aead_new_direct(encryptor, 1, key, iv), *dec = ptls_aead_new_direct(decryptor, 0, key, iv);
+    ok(enc->do_encrypt_v_s != NULL);
+    ok(enc_dec->do_encrypt_v_s == NULL);
+
+    ptls_cipher_context_t *hp = NULL, *ref_hp = NULL;
+    ptls_aead_supplementary_encryption_t supp, ref_supp, *suppp = NULL, *ref_suppp = NULL;
+    if (use_supp) {
+        hp = ptls_cipher_new(encryptor->ctr_cipher, 1, hp_key);
+        ref_hp = ptls_cipher_new(encryptor->ctr_cipher, 1, hp_key);
+        supp = (ptls_aead_supplementary_encryption_t){hp, output + sample_off};
+        ref_supp = (ptls_aead_supplementary_encryption_t){ref_hp, ref_output + sample_off};
+        suppp = &supp;
+        ref_suppp = &ref_supp;
+    }
+
+    size_t ret = ptls_aead_encrypt_v_s(enc, output, inputp, incnt, seq, aad, aadlen, suppp);
+    ptls_aead_encrypt_s(ref, ref_output, plaintext, textlen, seq, aad, aadlen, ref_suppp);
+
+    ok(ret == outlen);
+    ok(memcmp(output, ref_output, outlen) == 0);
+    if (use_supp)
+        ok(memcmp(supp.output, ref_supp.output, sizeof(supp.output)) == 0);
+    ok(memcmp(input, input_copy, sizeof(input)) == 0);
+    ok(memcmp(plaintext, plaintext_copy, sizeof(plaintext)) == 0);
+
+    size_t declen = ptls_aead_decrypt(dec, decrypted, output, outlen, seq, aad, aadlen);
+    ok(declen == textlen);
+    ok(memcmp(decrypted, plaintext, textlen) == 0);
+
+    if (hp != NULL)
+        ptls_cipher_free(hp);
+    if (ref_hp != NULL)
+        ptls_cipher_free(ref_hp);
+    ptls_aead_free(enc);
+    ptls_aead_free(enc_dec);
+    ptls_aead_free(ref);
+    ptls_aead_free(dec);
+}
+
+static void test_encrypt_v_s_matrix(ptls_aead_algorithm_t *encryptor, ptls_aead_algorithm_t *decryptor)
+{
+    test_encrypt_v_s_one(encryptor, decryptor, ENCRYPT_V_S_EMPTY, 1, 0);
+    test_encrypt_v_s_one(encryptor, decryptor, ENCRYPT_V_S_ONE, 0, 0);
+    test_encrypt_v_s_one(encryptor, decryptor, ENCRYPT_V_S_MULTI_ZERO, 1, 11);
+    test_encrypt_v_s_one(encryptor, decryptor, ENCRYPT_V_S_MULTI_ZERO, 1, 97 - 8);
+    test_encrypt_v_s_one(encryptor, decryptor, ENCRYPT_V_S_MULTI_ZERO, 1, 97);
+}
+
+static void test_default_encrypt_v_s(void)
+{
+    uint8_t key[PTLS_AES128_KEY_SIZE], iv[PTLS_AESGCM_IV_SIZE];
+    fill_deterministic_bytes(key, sizeof(key), 41);
+    fill_deterministic_bytes(iv, sizeof(iv), 42);
+
+    ptls_aead_context_t *enc = ptls_aead_new_direct(&ptls_minicrypto_aes128gcm, 1, key, iv);
+    ptls_aead_context_t *dec = ptls_aead_new_direct(&ptls_minicrypto_aes128gcm, 0, key, iv);
+    ok(enc->do_encrypt_v_s != NULL);
+    ok(dec->do_encrypt_v_s == NULL);
+    ptls_aead_free(enc);
+    ptls_aead_free(dec);
+
+    test_encrypt_v_s_matrix(&ptls_minicrypto_aes128gcm, &ptls_minicrypto_aes128gcm);
+}
+
 static void test_generated_all(ptls_aead_algorithm_t *e1, ptls_aead_algorithm_t *e2, int can_multivec)
 {
     test_generated_encryptor = e1;
@@ -641,12 +761,15 @@ static void test_fusion_aes128gcm(void)
 {
     test_generated_all(&ptls_fusion_aes128gcm, &ptls_minicrypto_aes128gcm, 1);
     test_deterministic_multivec(&ptls_fusion_aes128gcm, &ptls_minicrypto_aes128gcm);
+    /* White-box expectation: ordinary Fusion _v_s routes through fusion_aesgcm_encrypt_iter, not aead_do_encrypt_v. */
+    test_encrypt_v_s_matrix(&ptls_fusion_aes128gcm, &ptls_minicrypto_aes128gcm);
 }
 
 static void test_fusion_aes256gcm(void)
 {
     test_generated_all(&ptls_fusion_aes256gcm, &ptls_minicrypto_aes256gcm, 1);
     test_deterministic_multivec(&ptls_fusion_aes256gcm, &ptls_minicrypto_aes256gcm);
+    test_encrypt_v_s_matrix(&ptls_fusion_aes256gcm, &ptls_minicrypto_aes256gcm);
 }
 
 static void test_fusion_aesgcm(void)
@@ -658,11 +781,13 @@ static void test_fusion_aesgcm(void)
 static void test_non_temporal_aes128gcm(void)
 {
     test_generated_all(&ptls_non_temporal_aes128gcm, &ptls_minicrypto_aes128gcm, 1);
+    test_encrypt_v_s_matrix(&ptls_non_temporal_aes128gcm, &ptls_minicrypto_aes128gcm);
 }
 
 static void test_non_temporal_aes256gcm(void)
 {
     test_generated_all(&ptls_non_temporal_aes256gcm, &ptls_minicrypto_aes256gcm, 1);
+    test_encrypt_v_s_matrix(&ptls_non_temporal_aes256gcm, &ptls_minicrypto_aes256gcm);
 }
 
 static void test_non_temporal(void)
@@ -688,6 +813,7 @@ int main(int argc, char **argv)
     subtest("gcm-capacity", gcm_capacity);
     subtest("gcm-test-vectors", gcm_test_vectors);
     subtest("gcm-iv96", gcm_iv96);
+    subtest("default-encrypt-v-s", test_default_encrypt_v_s);
     subtest("fusion-aesgcm", test_fusion_aesgcm);
     subtest("non-temporal-avx128", test_non_temporal);
 

@@ -299,13 +299,17 @@ static void aead_set_iv(ptls_aead_context_t *_ctx, const void *iv)
     memcpy(ctx->static_iv, iv, ctx->super.algo->iv_size);
 }
 
-static void aead_encrypt_v(struct st_ptls_aead_context_t *_ctx, void *output, ptls_iovec_t *input, size_t incnt, uint64_t seq,
+static void aead_encrypt_v(struct st_ptls_aead_context_t *_ctx, void *output, const ptls_iovec_t *input, size_t incnt, uint64_t seq,
                            const void *aad, size_t aadlen)
 {
     struct ptls_mbedtls_aead_context_t *ctx = (struct ptls_mbedtls_aead_context_t *)_ctx;
     psa_aead_operation_t op = psa_aead_operation_init();
     uint8_t *dst = output, iv[PTLS_MAX_IV_SIZE], tag[PSA_AEAD_TAG_MAX_SIZE];
-    size_t outlen, taglen;
+    size_t inlen = ptls_aead__sum_iovec(input, incnt), outlen, taglen;
+
+    if (ctx->super.algo->tag_size > SIZE_MAX - inlen)
+        abort();
+    uint8_t *tag_at = dst + inlen;
 
     /* setup op */
     CALL_WITH_CHECK(psa_aead_encrypt_setup, &op, ctx->key, ctx->alg);
@@ -315,11 +319,13 @@ static void aead_encrypt_v(struct st_ptls_aead_context_t *_ctx, void *output, pt
 
     /* encrypt */
     for (size_t i = 0; i < incnt; i++) {
-        CALL_WITH_CHECK(psa_aead_update, &op, input[i].base, input[i].len, dst, SIZE_MAX, &outlen);
+        CALL_WITH_CHECK(psa_aead_update, &op, input[i].base, input[i].len, dst, tag_at - dst, &outlen);
         dst += outlen;
     }
-    CALL_WITH_CHECK(psa_aead_finish, &op, dst, SIZE_MAX, &outlen, tag, sizeof(tag), &taglen);
+    CALL_WITH_CHECK(psa_aead_finish, &op, dst, tag_at - dst, &outlen, tag, sizeof(tag), &taglen);
     dst += outlen;
+    assert(dst == tag_at);
+    assert(taglen == ctx->super.algo->tag_size);
     memcpy(dst, tag, taglen);
 
     /* destroy op */
@@ -373,7 +379,15 @@ static int aead_setup(ptls_aead_context_t *_ctx, int is_enc, const void *key_byt
     if (is_enc) {
         ctx->super.do_encrypt = ptls_aead__do_encrypt;
         ctx->super.do_encrypt_v = aead_encrypt_v;
+        ctx->super.do_encrypt_v_s = ptls_aead__do_encrypt_v_s;
+        ctx->super.do_decrypt = NULL;
     } else {
+        ctx->super.do_encrypt_init = NULL;
+        ctx->super.do_encrypt_update = NULL;
+        ctx->super.do_encrypt_final = NULL;
+        ctx->super.do_encrypt = NULL;
+        ctx->super.do_encrypt_v = NULL;
+        ctx->super.do_encrypt_v_s = NULL;
         ctx->super.do_decrypt = aead_decrypt;
     }
     memcpy(ctx->static_iv, iv, ctx->super.algo->iv_size);

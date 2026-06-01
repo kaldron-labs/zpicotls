@@ -400,6 +400,112 @@ static inline void storen128(void *_p, size_t l, __m128i v)
         p[i] = buf[i];
 }
 
+struct fusion_input {
+    const uint8_t *ptr;
+    size_t len;
+    const ptls_iovec_t *vec;
+    size_t vec_index;
+    size_t vec_count;
+};
+
+static inline struct fusion_input fusion_input_iovec(const ptls_iovec_t *input, size_t incnt)
+{
+    return (struct fusion_input){NULL, 0, input, 0, incnt};
+}
+
+static inline int fusion_input_next(struct fusion_input *src)
+{
+    while (src->len == 0 && src->vec_index != src->vec_count) {
+        src->ptr = src->vec[src->vec_index].base;
+        src->len = src->vec[src->vec_index].len;
+        ++src->vec_index;
+    }
+    return src->len != 0;
+}
+
+static size_t fusion_input_read(struct fusion_input *src, uint8_t *dst, size_t max)
+{
+    size_t off = 0;
+
+    while (off != max && fusion_input_next(src)) {
+        size_t len = max - off;
+        if (len > src->len)
+            len = src->len;
+        memcpy(dst + off, src->ptr, len);
+        src->ptr += len;
+        src->len -= len;
+        off += len;
+    }
+    return off;
+}
+
+static inline void fusion_input_consume(struct fusion_input *src, size_t len)
+{
+    src->ptr += len;
+    src->len -= len;
+}
+
+static inline void fusion_ghash_update128(struct ptls_fusion_aesgcm_context128 *ctx, struct ptls_fusion_gfmul_state128 *gstate,
+                                          __m128i block)
+{
+    gfmul_firststep128(gstate, block, ctx->ghash);
+    gfmul_reduce128(gstate);
+}
+
+static void fusion_aesgcm_encrypt_iter(ptls_fusion_aesgcm_context_t *_ctx, void *output, struct fusion_input *input, size_t inlen,
+                                       __m128i ctr, const void *_aad, size_t aadlen)
+{
+    struct ptls_fusion_aesgcm_context128 *ctx = (void *)_ctx;
+    const uint8_t *aad = _aad;
+    uint8_t *dst = output;
+    struct ptls_fusion_gfmul_state128 gstate = {0};
+    size_t aadlen_total = aadlen;
+
+    assert(!_ctx->ecb.aesni256);
+
+    while (aadlen >= 16) {
+        fusion_ghash_update128(ctx, &gstate, _mm_loadu_si128((const __m128i *)aad));
+        aad += 16;
+        aadlen -= 16;
+    }
+    if (aadlen != 0)
+        fusion_ghash_update128(ctx, &gstate, loadn128(aad, aadlen));
+
+    ctr = _mm_insert_epi32(ctr, 1, 0);
+    __m128i ek0 = aesecb_encrypt(&ctx->super.ecb, _mm_shuffle_epi8(ctr, byteswap128));
+
+    for (size_t left = inlen; left != 0;) {
+        ctr = _mm_add_epi64(ctr, one8);
+        __m128i bits = aesecb_encrypt(&ctx->super.ecb, _mm_shuffle_epi8(ctr, byteswap128)), enc;
+        size_t blocklen;
+
+        if (fusion_input_next(input) && input->len >= 16) {
+            enc = _mm_xor_si128(_mm_loadu_si128((const __m128i *)input->ptr), bits);
+            _mm_storeu_si128((__m128i *)dst, enc);
+            fusion_input_consume(input, 16);
+            blocklen = 16;
+        } else {
+            uint8_t block[16] = {0}, encbuf[16] = {0};
+
+            blocklen = fusion_input_read(input, block, left < 16 ? left : 16);
+            assert(blocklen != 0);
+            enc = _mm_xor_si128(_mm_loadu_si128((const __m128i *)block), bits);
+            storen128(dst, blocklen, enc);
+            storen128(encbuf, blocklen, enc);
+            enc = _mm_loadu_si128((const __m128i *)encbuf);
+        }
+
+        fusion_ghash_update128(ctx, &gstate, enc);
+        dst += blocklen;
+        left -= blocklen;
+    }
+
+    __m128i ac =
+        _mm_shuffle_epi8(_mm_set_epi32(0, (int)aadlen_total * 8, 0, (int)inlen * 8), byteswap128);
+    fusion_ghash_update128(ctx, &gstate, ac);
+    _mm_storeu_si128((__m128i *)dst, gfmul_get_tag128(&gstate, ek0));
+}
+
 void ptls_fusion_aesgcm_encrypt(ptls_fusion_aesgcm_context_t *_ctx, void *output, const void *input, size_t inlen, __m128i ctr,
                                 const void *_aad, size_t aadlen, ptls_aead_supplementary_encryption_t *supp)
 {
@@ -1131,6 +1237,18 @@ static uint8_t *aesgcm_get_scratch(struct aesgcm_context *ctx, size_t required)
     return ctx->scratch;
 }
 
+static void aesgcm_ensure_capacity(struct aesgcm_context *ctx, size_t textlen, size_t aadlen)
+{
+    if (aadlen > SIZE_MAX - textlen)
+        abort();
+
+    size_t required = textlen + aadlen;
+    if (required > ctx->aesgcm->capacity) {
+        ctx->aesgcm = ptls_fusion_aesgcm_set_capacity(ctx->aesgcm, required);
+        assert(ctx->aesgcm != NULL && "fusion assumes sufficient amount of memory to be available");
+    }
+}
+
 static void aead_do_encrypt_init(ptls_aead_context_t *_ctx, uint64_t seq, const void *aad, size_t aadlen)
 {
     assert(!"FIXME");
@@ -1162,26 +1280,17 @@ void aead_do_encrypt(struct st_ptls_aead_context_t *_ctx, void *output, const vo
 {
     struct aesgcm_context *ctx = (void *)_ctx;
 
-    if (inlen + aadlen > ctx->aesgcm->capacity) {
-        ctx->aesgcm = ptls_fusion_aesgcm_set_capacity(ctx->aesgcm, inlen + aadlen);
-        assert(ctx->aesgcm != NULL && "fusion assumes sufficient amount of memory to be available");
-    }
+    aesgcm_ensure_capacity(ctx, inlen, aadlen);
     ptls_fusion_aesgcm_encrypt(ctx->aesgcm, output, input, inlen, calc_counter(ctx, seq), aad, aadlen, supp);
 }
 
-static void aead_do_encrypt_v(struct st_ptls_aead_context_t *_ctx, void *output, ptls_iovec_t *input, size_t incnt, uint64_t seq,
+static void aead_do_encrypt_v(struct st_ptls_aead_context_t *_ctx, void *output, const ptls_iovec_t *input, size_t incnt, uint64_t seq,
                               const void *aad, size_t aadlen)
 {
     struct aesgcm_context *ctx = (struct aesgcm_context *)_ctx;
-    size_t inlen = 0;
+    size_t inlen = ptls_aead__sum_iovec(input, incnt);
     uint8_t *buf = output;
     int use_scratch = 0;
-
-    for (size_t i = 0; i != incnt; ++i) {
-        if (input[i].len > SIZE_MAX - inlen)
-            abort();
-        inlen += input[i].len;
-    }
 
     if (incnt == 1) {
         aead_do_encrypt(_ctx, output, input[0].base, input[0].len, seq, aad, aadlen, NULL);
@@ -1216,6 +1325,19 @@ static void aead_do_encrypt_v(struct st_ptls_aead_context_t *_ctx, void *output,
         ptls_clear_memory(buf, inlen);
 }
 
+static void aead_do_encrypt_v_s(struct st_ptls_aead_context_t *_ctx, void *output, const ptls_iovec_t *input, size_t incnt,
+                                uint64_t seq, const void *aad, size_t aadlen, ptls_aead_supplementary_encryption_t *supp)
+{
+    struct aesgcm_context *ctx = (struct aesgcm_context *)_ctx;
+    size_t inlen = ptls_aead__sum_iovec(input, incnt);
+    struct fusion_input input_iter = fusion_input_iovec(input, incnt);
+
+    aesgcm_ensure_capacity(ctx, inlen, aadlen);
+
+    fusion_aesgcm_encrypt_iter(ctx->aesgcm, output, &input_iter, inlen, calc_counter(ctx, seq), aad, aadlen);
+    ptls_aead__do_supplementary(supp);
+}
+
 static size_t aead_do_decrypt(ptls_aead_context_t *_ctx, void *output, const void *input, size_t inlen, uint64_t seq,
                               const void *aad, size_t aadlen)
 {
@@ -1225,10 +1347,7 @@ static size_t aead_do_decrypt(ptls_aead_context_t *_ctx, void *output, const voi
         return SIZE_MAX;
 
     size_t enclen = inlen - 16;
-    if (enclen + aadlen > ctx->aesgcm->capacity) {
-        ctx->aesgcm = ptls_fusion_aesgcm_set_capacity(ctx->aesgcm, enclen + aadlen);
-        assert(ctx->aesgcm != NULL && "fusion assumes sufficient amount of memory to be available");
-    }
+    aesgcm_ensure_capacity(ctx, enclen, aadlen);
     if (!ptls_fusion_aesgcm_decrypt(ctx->aesgcm, output, input, enclen, calc_counter(ctx, seq), aad, aadlen,
                                     (const uint8_t *)input + enclen))
         return SIZE_MAX;
@@ -1270,6 +1389,7 @@ static int aesgcm_setup(ptls_aead_context_t *_ctx, int is_enc, const void *key, 
     ctx->super.do_encrypt_final = aead_do_encrypt_final;
     ctx->super.do_encrypt = aead_do_encrypt;
     ctx->super.do_encrypt_v = aead_do_encrypt_v;
+    ctx->super.do_encrypt_v_s = is_enc ? aead_do_encrypt_v_s : NULL;
     ctx->super.do_decrypt = aead_do_decrypt;
 
     ctx->aesgcm = new_aesgcm(key, key_size, 1500 /* assume ordinary packet size */, 0 /* no support for aesni256 yet */);
@@ -1326,14 +1446,6 @@ ptls_aead_algorithm_t ptls_fusion_aes256gcm = {"AES256-GCM",
                                                0,
                                                sizeof(struct aesgcm_context),
                                                aes256gcm_setup};
-
-static inline size_t calc_total_length(ptls_iovec_t *input, size_t incnt)
-{
-    size_t totlen = 0;
-    for (size_t i = 0; i < incnt; ++i)
-        totlen += input[i].len;
-    return totlen;
-}
 
 static inline void reduce_aad128(struct ptls_fusion_gfmul_state128 *gstate, struct ptls_fusion_aesgcm_ghash_precompute128 *ghash,
                                  const void *_aad, size_t aadlen)
@@ -1409,7 +1521,7 @@ static inline void write_remaining_bytes(uint8_t *dst, const uint8_t *src, const
 }
 
 NO_SANITIZE_ADDRESS
-static void non_temporal_encrypt_v128(struct st_ptls_aead_context_t *_ctx, void *_output, ptls_iovec_t *input, size_t incnt,
+static void non_temporal_encrypt_v128(struct st_ptls_aead_context_t *_ctx, void *_output, const ptls_iovec_t *input, size_t incnt,
                                       uint64_t seq, const void *aad, size_t aadlen)
 {
 /* init the bits (we can always run in full), but use the last slot for calculating ek0, if possible */
@@ -1487,10 +1599,11 @@ static void non_temporal_encrypt_v128(struct st_ptls_aead_context_t *_ctx, void 
         state |= STATE_COPY_128B;
 
     /* setup ctr, retain Ek(0), len(A) | len(C) to be fed into GCM */
+    size_t total_length = ptls_aead__sum_iovec(input, incnt);
     __m128i ctr = calc_counter(agctx, seq);
     ctr = _mm_insert_epi32(ctr, 1, 0);
     __m128i ek0 = _mm_shuffle_epi8(ctr, byteswap128);
-    __m128i ac = _mm_shuffle_epi8(_mm_set_epi32(0, (int)aadlen * 8, 0, (int)calc_total_length(input, incnt) * 8), byteswap128);
+    __m128i ac = _mm_shuffle_epi8(_mm_set_epi32(0, (int)aadlen * 8, 0, (int)total_length * 8), byteswap128);
 
     struct ptls_fusion_aesgcm_context128 *ctx = (void *)agctx->aesgcm;
     __m128i bits0, bits1, bits2, bits3, bits4, bits5 = _mm_setzero_si128();
@@ -1872,7 +1985,7 @@ static size_t non_temporal_decrypt128(ptls_aead_context_t *_ctx, void *_output, 
 }
 
 NO_SANITIZE_ADDRESS
-static void non_temporal_encrypt_v256(struct st_ptls_aead_context_t *_ctx, void *_output, ptls_iovec_t *input, size_t incnt,
+static void non_temporal_encrypt_v256(struct st_ptls_aead_context_t *_ctx, void *_output, const ptls_iovec_t *input, size_t incnt,
                                       uint64_t seq, const void *_aad, size_t aadlen)
 {
 /* init the bits (we can always run in full), but use the last slot for calculating ek0, if possible */
@@ -1945,12 +2058,12 @@ static void non_temporal_encrypt_v256(struct st_ptls_aead_context_t *_ctx, void 
     encp = load_preceding_unaligned(encbuf, &output);
 
     /* setup ctr, retaining Ek(0), len(A) | len(C) to be fed into GCM */
+    size_t total_length = ptls_aead__sum_iovec(input, incnt);
     __m256i ctr = _mm256_broadcastsi128_si256(calc_counter(agctx, seq));
     ctr = _mm256_insert_epi32(ctr, 1, 4);
     __m256i ac_ek0 = _mm256_permute2f128_si256(
         /* first half: ac */
-        _mm256_castsi128_si256(
-            _mm_shuffle_epi8(_mm_set_epi32(0, (int)aadlen * 8, 0, (int)calc_total_length(input, incnt) * 8), byteswap128)),
+        _mm256_castsi128_si256(_mm_shuffle_epi8(_mm_set_epi32(0, (int)aadlen * 8, 0, (int)total_length * 8), byteswap128)),
         /* second half: ek0 */
         _mm256_shuffle_epi8(ctr, byteswap256), 0x30);
 
@@ -2199,11 +2312,13 @@ static int non_temporal_setup(ptls_aead_context_t *_ctx, int is_enc, const void 
     if (is_enc) {
         ctx->super.do_encrypt = ptls_aead__do_encrypt;
         ctx->super.do_encrypt_v = aesni256 ? non_temporal_encrypt_v256 : non_temporal_encrypt_v128;
+        ctx->super.do_encrypt_v_s = ptls_aead__do_encrypt_v_s;
         ctx->super.do_decrypt = NULL;
     } else {
         assert(!aesni256);
         ctx->super.do_encrypt = NULL;
         ctx->super.do_encrypt_v = NULL;
+        ctx->super.do_encrypt_v_s = NULL;
         ctx->super.do_decrypt = non_temporal_decrypt128;
     }
 

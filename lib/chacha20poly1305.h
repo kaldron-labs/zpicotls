@@ -180,6 +180,7 @@ static int chacha20poly1305_setup_crypto(ptls_aead_context_t *_ctx, int is_enc, 
         ctx->super.do_encrypt_final = chacha20poly1305_encrypt_final;
         ctx->super.do_encrypt = ptls_aead__do_encrypt;
         ctx->super.do_encrypt_v = ptls_aead__do_encrypt_v;
+        ctx->super.do_encrypt_v_s = ptls_aead__do_encrypt_v_s;
         ctx->super.do_decrypt = NULL;
     } else {
         ctx->super.do_encrypt_init = NULL;
@@ -187,6 +188,7 @@ static int chacha20poly1305_setup_crypto(ptls_aead_context_t *_ctx, int is_enc, 
         ctx->super.do_encrypt_final = NULL;
         ctx->super.do_encrypt = NULL;
         ctx->super.do_encrypt_v = NULL;
+        ctx->super.do_encrypt_v_s = NULL;
         ctx->super.do_decrypt = chacha20poly1305_decrypt;
     }
 

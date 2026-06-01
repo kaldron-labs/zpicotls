@@ -1590,6 +1590,7 @@ static int aead_setup_crypto(ptls_aead_context_t *_ctx, int is_enc, const void *
         ctx->super.do_encrypt_final = aead_do_encrypt_final;
         ctx->super.do_encrypt = ptls_aead__do_encrypt;
         ctx->super.do_encrypt_v = ptls_aead__do_encrypt_v;
+        ctx->super.do_encrypt_v_s = ptls_aead__do_encrypt_v_s;
         ctx->super.do_decrypt = NULL;
     } else {
         ctx->super.do_encrypt_init = NULL;
@@ -1597,6 +1598,7 @@ static int aead_setup_crypto(ptls_aead_context_t *_ctx, int is_enc, const void *
         ctx->super.do_encrypt_final = NULL;
         ctx->super.do_encrypt = NULL;
         ctx->super.do_encrypt_v = NULL;
+        ctx->super.do_encrypt_v_s = NULL;
         ctx->super.do_decrypt = aead_do_decrypt;
     }
     ctx->evp_ctx = NULL;

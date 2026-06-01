@@ -12,10 +12,14 @@ Key changes:
 - Custom buffer allocation hooks: buffer growth is routed through overridable allocator/free
   callbacks, preserving alignment and direction metadata. Tests cover allocation, alignment,
   failure behavior, and RX/TX direction in t/picotls.c:273.
-- Fusion AES-GCM multivector encryption: upstream’s aead_do_encrypt_v placeholder is implemented
-  in lib/fusion.c:1172. It handles multi-iovec input, in-place contiguous encryption, partial
-  overlap via reusable scratch space, and clears scratch memory. Deterministic overlap/
-  regression tests were added in t/fusion.c:490.
+- Fusion AES-GCM multivector encryption: upstream’s `aead_do_encrypt_v` placeholder is implemented
+  in `lib/fusion.c`, and the public `ptls_aead_encrypt_v_s` API adds vector-plus-supplementary
+  encryption for direct retained plaintext buffers. The contiguous one-shot path keeps the
+  pipelined Fusion shape; the `_v_s` path encrypts from iovecs without plaintext staging and
+  computes supplementary output after ciphertext and tag are written. The `_v_s` direct path
+  expects plaintext ranges to be disjoint from the output buffer while allowing the supplementary
+  sample to point into ciphertext or tag bytes. Deterministic overlap, vector, and
+  supplementary-timing regression tests live in `t/fusion.c`.
 - Build/install/package work: CMake now declares version 1.3, includes install rules, installs
   backend-specific headers/libraries, and generates pkg-config files for core/minicrypto/fusion/
   openssl/mbedtls in CMakeLists.txt:4 and cmake/zpicotls.pc.in. A local Arch/MSYS-style
