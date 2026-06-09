@@ -3646,6 +3646,10 @@ static int client_hello_decode_server_name(ptls_iovec_t *name, const uint8_t **s
             ptls_decode_open_block(*src, end, 2, {
                 switch (type) {
                 case PTLS_SERVER_NAME_TYPE_HOSTNAME:
+                    if (end - *src == 0) {
+                        ret = PTLS_ALERT_DECODE_ERROR;
+                        goto Exit;
+                    }
                     if (memchr(*src, '\0', end - *src) != 0) {
                         ret = PTLS_ALERT_ILLEGAL_PARAMETER;
                         goto Exit;
@@ -7259,13 +7263,37 @@ int ptls_log__do_write_end(struct st_ptls_log_point_t *point, struct st_ptls_log
 
 void ptls_log_init_conn_state(ptls_log_conn_state_t *state, void (*random_bytes)(void *, size_t))
 {
+    ptls_log_init_conn_state_ex(state, random_bytes, 0, NULL);
+}
+
+void ptls_log_init_conn_state_ex(ptls_log_conn_state_t *state, void (*random_bytes)(void *, size_t), uint64_t conn_id,
+                                 void *_peeraddr)
+{
     uint32_t r;
     random_bytes(&r, sizeof(r));
 
     *state = (ptls_log_conn_state_t){
         .random_ = (float)r / ((uint64_t)UINT32_MAX + 1), /* [0..1), so that any(r) < sample_ratio where sample_ratio is [0..1] */
-        .address = {0}, /* inaddr6_any */
+        .address = {0},                                   /* inaddr6_any */
+        .conn_id = conn_id,
     };
+#ifdef _WIN32
+    (void)_peeraddr;
+#else
+    struct sockaddr *peeraddr = _peeraddr;
+    if (peeraddr != NULL) {
+        switch (peeraddr->sa_family) {
+        case AF_INET: /* store as v6-mapped v4 address */
+            ptls_build_v4_mapped_v6_address(state->address, &((struct sockaddr_in *)peeraddr)->sin_addr);
+            break;
+        case AF_INET6:
+            memcpy(state->address, ((struct sockaddr_in6 *)peeraddr)->sin6_addr.s6_addr, sizeof(state->address));
+            break;
+        default:
+            break;
+        }
+    }
+#endif
 }
 
 size_t ptls_log_num_lost(void)
