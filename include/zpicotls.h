@@ -2207,9 +2207,10 @@ inline uint8_t *ptls_encode_quicint(uint8_t *p, uint64_t v)
                 *p++ = 0x80 | (uint8_t)(v >> 24);
                 sb = 2 * 8;
             }
-            do {
+            while (sb != 0) {
                 *p++ = (uint8_t)(v >> sb);
-            } while ((sb -= 8) != 0);
+                sb -= 8;
+            }
         } else {
             *p++ = 0x40 | (uint8_t)((uint16_t)v >> 8);
         }

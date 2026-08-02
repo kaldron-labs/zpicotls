@@ -1133,6 +1133,7 @@ static ptls_t *clone_tls(ptls_t *src)
     assert(r == 0);
     r = ptls_import(ctx_peer, &dest, (ptls_iovec_t){.base = sess_data.base, .len = sess_data.off});
     assert(r == 0);
+    (void)r;
     ptls_buffer_dispose(&sess_data);
 
     check_clone(src, dest);
@@ -1618,6 +1619,7 @@ static int async_sign_certificate(ptls_sign_certificate_t *self, ptls_t *tls, pt
             ptls_buffer_init_tx(&fakebuf, "", 0);
             int ret = sign_certificate(self, tls, NULL, selected_algorithm, &fakebuf, input, algorithms, num_algorithms);
             assert(ret == 0);
+            (void)ret;
             ptls_buffer_dispose(&fakebuf);
             async_ctx.super.destroy_ = (void (*)(ptls_async_job_t *))0xdeadbeef;
             async_ctx.selected_algorithm = *selected_algorithm;

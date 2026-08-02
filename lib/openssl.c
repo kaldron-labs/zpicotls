@@ -1260,6 +1260,7 @@ static void cipher_do_init(ptls_cipher_context_t *_ctx, const void *iv)
     int ret;
     ret = EVP_EncryptInit_ex(ctx->evp, NULL, NULL, NULL, iv);
     assert(ret);
+    (void)ret;
 }
 
 static int cipher_setup_crypto(ptls_cipher_context_t *_ctx, int is_enc, const void *key, const EVP_CIPHER *cipher,
@@ -1294,6 +1295,7 @@ static void cipher_encrypt(ptls_cipher_context_t *_ctx, void *output, const void
     struct cipher_context_t *ctx = (struct cipher_context_t *)_ctx;
     int len = (int)_len, ret = EVP_EncryptUpdate(ctx->evp, output, &len, input, len);
     assert(ret);
+    (void)ret;
     assert(len == (int)_len);
 }
 
@@ -1302,6 +1304,7 @@ static void cipher_decrypt(ptls_cipher_context_t *_ctx, void *output, const void
     struct cipher_context_t *ctx = (struct cipher_context_t *)_ctx;
     int len = (int)_len, ret = EVP_DecryptUpdate(ctx->evp, output, &len, input, len);
     assert(ret);
+    (void)ret;
     assert(len == (int)_len);
 }
 
@@ -1517,6 +1520,7 @@ static void aead_do_encrypt_init(ptls_aead_context_t *_ctx, uint64_t seq, const 
         ret = EVP_EncryptUpdate(ctx->evp_ctx, NULL, &blocklen, aad, (int)aadlen);
         assert(ret);
     }
+    (void)ret;
 }
 
 static size_t aead_do_encrypt_update(ptls_aead_context_t *_ctx, void *output, const void *input, size_t inlen)
@@ -1526,6 +1530,7 @@ static size_t aead_do_encrypt_update(ptls_aead_context_t *_ctx, void *output, co
 
     ret = EVP_EncryptUpdate(ctx->evp_ctx, output, &blocklen, input, (int)inlen);
     assert(ret);
+    (void)ret;
 
     return blocklen;
 }
@@ -1542,6 +1547,7 @@ static size_t aead_do_encrypt_final(ptls_aead_context_t *_ctx, void *_output)
     off += blocklen;
     ret = EVP_CIPHER_CTX_ctrl(ctx->evp_ctx, EVP_CTRL_GCM_GET_TAG, (int)tag_size, output + off);
     assert(ret);
+    (void)ret;
     off += tag_size;
 
     return off;
@@ -1567,6 +1573,7 @@ static size_t aead_do_decrypt(ptls_aead_context_t *_ctx, void *_output, const vo
     }
     ret = EVP_DecryptUpdate(ctx->evp_ctx, output + off, &blocklen, input, (int)(inlen - tag_size));
     assert(ret);
+    (void)ret;
     off += blocklen;
     if (!EVP_CIPHER_CTX_ctrl(ctx->evp_ctx, EVP_CTRL_GCM_SET_TAG, (int)tag_size, (void *)((uint8_t *)input + inlen - tag_size)))
         return SIZE_MAX;

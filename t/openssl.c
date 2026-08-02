@@ -274,6 +274,7 @@ static ptls_key_exchange_context_t *key_from_pem(const char *pem)
     ptls_key_exchange_context_t *ctx;
     int ret = ptls_openssl_create_key_exchange(&ctx, pkey);
     assert(ret == 0 && "failed to setup private key");
+    (void)ret;
 
     EVP_PKEY_free(pkey);
     return ctx;

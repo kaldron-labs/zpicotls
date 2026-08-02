@@ -2250,6 +2250,7 @@ static int encode_client_hello(ptls_context_t *ctx, ptls_buffer_t *sendbuf, enum
                     ptls_buffer_push_block(sendbuf, 2, {
                         assert(sendbuf->off - ext_payload_from ==
                                outer_ech_header_size(is_second_flight ? 0 : ech->client.enc.len));
+                        (void)ext_payload_from;
                         if ((ret = ptls_buffer_reserve(sendbuf, *ech_size_offset, 1)) != 0)
                             goto Exit;
                         memset(sendbuf->base + sendbuf->off, 0, *ech_size_offset);

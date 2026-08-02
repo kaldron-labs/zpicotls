@@ -22,6 +22,15 @@
 #include "../deps/picotest/picotest.h"
 #include "test.h"
 
+#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 8
+/* Prevent GCC LTO from pairing the context size or key size of one cipher with the callback of another. */
+__attribute__((noipa))
+#endif
+static ptls_cipher_context_t *new_cipher(ptls_cipher_algorithm_t *algo, int is_enc, const void *key)
+{
+    return ptls_cipher_new(algo, is_enc, key);
+}
+
 void test_quiclb(ptls_cipher_algorithm_t *algo)
 {
     static const uint8_t key[PTLS_QUICLB_KEY_SIZE] = {0xfd, 0xf7, 0x26, 0xa9, 0x89, 0x3e, 0xc0, 0x5c,
@@ -33,16 +42,15 @@ void test_quiclb(ptls_cipher_algorithm_t *algo)
     /* round-trip test; also check the result when the input vector is exactly that of draft-ietf-quic-load-balancers-21 */
     for (size_t len = PTLS_QUICLB_MIN_BLOCK_SIZE; len <= PTLS_QUICLB_MAX_BLOCK_SIZE; ++len) {
         /* encrypt */
-        ptls_cipher_context_t *ctx = ptls_cipher_new(algo, 1, key);
+        ptls_cipher_context_t *ctx = new_cipher(algo, 1, key);
         ptls_cipher_encrypt(ctx, tmp, plaintext, len);
         ptls_cipher_free(ctx);
         if (len == sizeof(test_vector_encrypted))
             ok(memcmp(tmp, test_vector_encrypted, len) == 0);
         /* decrypt */
-        ctx = ptls_cipher_new(algo, 0, key);
+        ctx = new_cipher(algo, 0, key);
         ptls_cipher_encrypt(ctx, tmp, tmp, len);
         ptls_cipher_free(ctx);
         ok(memcmp(tmp, plaintext, len) == 0);
     }
 }
-
