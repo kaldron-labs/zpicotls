@@ -308,6 +308,14 @@ IF (BUILD_FUZZER)
 
 ENDIF()
 
+# Install versioned SONAMEs and linker symlinks; bump the ABI number for
+# incompatible changes to the public library interface.
+foreach(target zpicotls-core zpicotls-minicrypto zpicotls-fusion zpicotls-openssl zpicotls-mbedtls)
+    if (TARGET ${target})
+        set_target_properties(${target} PROPERTIES VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR})
+    endif()
+endforeach()
+
 install(FILES include/zpicotls.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(DIRECTORY include/zpicotls DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
         PATTERN "mbedtls.h" EXCLUDE

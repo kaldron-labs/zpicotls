@@ -77,6 +77,22 @@ Build using cmake:
 % make check
 ```
 
+Building a local Ubuntu/Debian package
+---
+
+Install the build dependencies, initialize the submodule, and build the `.deb`
+from the repository root:
+```
+% sudo apt install build-essential debhelper cmake libbrotli-dev libssl-dev pkgconf
+% git submodule update --init --recursive
+% dpkg-buildpackage -b -us -uc
+```
+
+The package is written to the parent directory as `zpicotls_1.6-3_amd64.deb`
+on Ubuntu amd64. Install it with `sudo apt install ../zpicotls_1.6-3_amd64.deb`.
+This local build uses the source already present in the checkout; it does not
+download submodules during the package build.
+
 A dedicated documentation for using zpicotls with Visual Studio can be found in [WindowsPort.md](WindowsPort.md).
 
 Developer documentation

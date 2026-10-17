@@ -1,0 +1,12 @@
+zpicotls (1.6-3) unstable; urgency=medium
+
+  * Install versioned shared libraries with an ABI 1 SONAME.
+
+ -- Huw Rogers <hrogers@kaldron.io>  Sat, 17 Oct 2026 00:00:00 +0000
+
+zpicotls (1.6-2) unstable; urgency=medium
+
+  * Add local Debian packaging for the shared libraries, headers, and
+    pkg-config files.
+
+ -- Huw Rogers <hrogers@kaldron.io>  Sat, 17 Oct 2026 00:00:00 +0000

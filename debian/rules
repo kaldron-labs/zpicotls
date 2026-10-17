@@ -1,0 +1,14 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@ --buildsystem=cmake
+
+override_dh_auto_configure:
+	@test -f deps/picotest/picotest.c || { echo 'Missing deps/picotest: run git submodule update --init --recursive' >&2; exit 1; }
+	dh_auto_configure -- \
+		-DBUILD_SHARED_LIBS=ON \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DCMAKE_INSTALL_PREFIX=/usr \
+		-DCMAKE_INSTALL_LIBDIR=lib/$(shell dpkg-architecture -qDEB_HOST_MULTIARCH) \
+		-DCMAKE_INSTALL_RPATH= \
+		-DWITH_GPROF=OFF
