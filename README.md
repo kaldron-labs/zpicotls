@@ -88,8 +88,8 @@ from the repository root:
 % dpkg-buildpackage -b -us -uc
 ```
 
-The package is written to the parent directory as `zpicotls_1.6-3_amd64.deb`
-on Ubuntu amd64. Install it with `sudo apt install ../zpicotls_1.6-3_amd64.deb`.
+The package is written to the parent directory as `zpicotls_1.7-1_amd64.deb`
+on Ubuntu amd64. Install it with `sudo apt install ../zpicotls_1.7-1_amd64.deb`.
 This local build uses the source already present in the checkout; it does not
 download submodules during the package build.
 

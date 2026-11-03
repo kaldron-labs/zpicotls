@@ -1,3 +1,10 @@
+zpicotls (1.7-1) unstable; urgency=medium
+
+  * Bump the minor version to 1.7 for detached vector transmission.
+  * Include the Fusion GHASH lane fix and exact receive-buffer sizing.
+
+ -- Huw Rogers <hrogers@kaldron.io>  Tue, 03 Nov 2026 11:16:31 +0000
+
 zpicotls (1.6-3) unstable; urgency=medium
 
   * Install versioned shared libraries with an ABI 1 SONAME.
