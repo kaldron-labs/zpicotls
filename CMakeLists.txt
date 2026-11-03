@@ -187,6 +187,10 @@ IF (OPENSSL_FOUND AND NOT (OPENSSL_VERSION VERSION_LESS "1.0.1"))
     LIST(APPEND PTLSBENCH_LIBS zpicotls-openssl ${OPENSSL_CRYPTO_LIBRARIES} ${AEGIS_LIBRARIES} ${CMAKE_DL_LIBS})
 
     SET(TEST_EXES ${TEST_EXES} test-openssl.t)
+    # Uses the normal core DSO: memory-debug deliberately forces allocations.
+    ADD_EXECUTABLE(test-exact-rx.t t/exact-rx.c deps/picotest/picotest.c)
+    TARGET_LINK_LIBRARIES(test-exact-rx.t zpicotls-openssl zpicotls-core)
+    SET(TEST_EXES ${TEST_EXES} test-exact-rx.t)
 ELSE ()
     MESSAGE(WARNING "Disabling OpenSSL support (requires 1.0.1 or newer)")
 ENDIF ()
