@@ -312,7 +312,7 @@ static inline void gfmul_reduce256(struct ptls_fusion_gfmul_state256 *gstate)
 #undef XOR_256TO128
 
     lo = gfmul_do_reduce(hi, lo, mid);
-    gstate->lo = _mm256_castsi128_si256(lo);
+    gstate->lo = _mm256_zextsi128_si256(lo);
 }
 
 static inline __m128i gfmul_get_tag256(struct ptls_fusion_gfmul_state256 *gstate, __m128i ek0)
