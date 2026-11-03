@@ -6344,6 +6344,85 @@ int ptls_tx_send(ptls_tx_t *tx, ptls_buffer_t *sendbuf, const void *input, size_
     return ptls_send(&tx->tls, sendbuf, input, inlen);
 }
 
+int ptls_tx_sendv(ptls_tx_t *tx, ptls_buffer_t *sendbuf, ptls_iovec_t *input, size_t incnt)
+{
+    size_t inlen = 0;
+    int ret = 0;
+    uint8_t type = PTLS_CONTENT_TYPE_APPDATA;
+
+    if (tx == NULL)
+        return PTLS_ERROR_NOT_AVAILABLE;
+    for (size_t i = 0; i != incnt; ++i) {
+        if (input[i].len > PTLS_MAX_PLAINTEXT_RECORD_SIZE - inlen)
+            return PTLS_ERROR_LIBRARY;
+        inlen += input[i].len;
+    }
+    if ((ret = buffer_require_direction(sendbuf, 1)) != 0)
+        return ret;
+
+    ptls_t *tls = &tx->tls;
+    struct st_ptls_traffic_protection_t *enc = &tls->traffic_protection.enc;
+    assert(enc->aead != NULL);
+    if (enc->seq >= 16777216 && tls->key_schedule != NULL)
+        tls->needs_key_update = 1;
+    if (tls->needs_key_update) {
+        if ((ret = update_send_key(tls, sendbuf, tls->key_update_send_request)) != 0)
+            return ret;
+        tls->needs_key_update = 0;
+        tls->key_update_send_request = 0;
+    }
+    if (inlen == 0)
+        return 0;
+
+    if (enc->tls12) {
+        buffer_push_record(sendbuf, type, {
+            if ((ret = ptls_buffer_reserve_aligned(
+                     sendbuf, enc->aead->algo->tls12.record_iv_size + inlen + enc->aead->algo->tag_size,
+                     enc->aead->algo->align_bits, 1)) != 0)
+                goto Exit;
+            uint64_t nonce;
+            if (enc->aead->algo->tls12.record_iv_size != 0) {
+                assert(enc->aead->algo->tls12.record_iv_size == 8);
+                nonce = enc->tls12_enc_record_iv++;
+                encode64(sendbuf->base + sendbuf->off, nonce);
+                sendbuf->off += 8;
+            } else {
+                nonce = enc->seq;
+            }
+            uint8_t aad[PTLS_TLS12_AAD_SIZE];
+            build_tls12_aad(aad, type, enc->seq, (uint16_t)inlen);
+            ptls_aead_encrypt_v_s(enc->aead, sendbuf->base + sendbuf->off, input, incnt, nonce, aad, sizeof(aad), NULL);
+            sendbuf->off += inlen + enc->aead->algo->tag_size;
+            ++enc->seq;
+        });
+    } else {
+        buffer_push_record(sendbuf, type, {
+            if ((ret = ptls_buffer_reserve_aligned(sendbuf, inlen + enc->aead->algo->tag_size + 1,
+                                                  enc->aead->algo->align_bits, 1)) != 0)
+                goto Exit;
+#if PTLS_FUZZ_HANDSHAKE
+            /* Match aead_encrypt's plaintext records and dummy tag in handshake fuzzing builds. */
+            for (size_t i = 0; i != incnt; ++i) {
+                if (input[i].len != 0)
+                    memcpy(sendbuf->base + sendbuf->off, input[i].base, input[i].len);
+                sendbuf->off += input[i].len;
+            }
+            sendbuf->base[sendbuf->off++] = type;
+            sendbuf->off += 16;
+#else
+            uint8_t aad[5];
+            build_aad(aad, inlen + 1 + enc->aead->algo->tag_size);
+            input[incnt] = ptls_iovec_init(&type, 1);
+            ptls_aead_encrypt_v_s(enc->aead, sendbuf->base + sendbuf->off, input, incnt + 1, enc->seq++, aad, sizeof(aad),
+                                  NULL);
+            sendbuf->off += inlen + 1 + enc->aead->algo->tag_size;
+#endif
+        });
+    }
+Exit:
+    return ret;
+}
+
 int ptls_tx_update_key(ptls_tx_t *tx, ptls_buffer_t *sendbuf, int request_update)
 {
     int ret;

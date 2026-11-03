@@ -1803,6 +1803,13 @@ void ptls_tx_free(ptls_tx_t *tx);
  */
 int ptls_tx_send(ptls_tx_t *tx, ptls_buffer_t *sendbuf, const void *input, size_t inlen);
 /**
+ * Encrypts up to 16384 bytes of immutable source spans into one application-data record, optionally preceded by KeyUpdate.
+ * `input` points to incnt + 1 writable iovecs; the final entry is scratch for TLS 1.3's content type. Payload bytes are never
+ * gathered or modified. The caller splits larger logical input at record boundaries. Contiguous transmission is unchanged.
+ */
+#define PTLS_HAVE_TX_SENDV 1
+int ptls_tx_sendv(ptls_tx_t *tx, ptls_buffer_t *sendbuf, ptls_iovec_t *input, size_t incnt);
+/**
  * emits a KeyUpdate using the current key and installs the next outbound key before returning
  */
 int ptls_tx_update_key(ptls_tx_t *tx, ptls_buffer_t *sendbuf, int request_update);
