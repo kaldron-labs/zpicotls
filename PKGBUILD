@@ -3,8 +3,8 @@
 options=(strip !debug)
 
 pkgname=zpicotls
-pkgver=1.6
-pkgrel=3
+pkgver=2.0
+pkgrel=1
 pkgdesc='zpicotls'
 url='https://github.com/kaldron-labs/zpicotls'
 license=('MIT')
