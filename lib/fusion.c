@@ -111,6 +111,13 @@ struct aesgcm_context {
      * retains the static IV in the upper 96 bits (in little endian)
      */
     __m128i static_iv;
+    struct {
+        __m128i j0, ctr, hash;
+        uint8_t bits[16], carry[16];
+        size_t bit_used, carry_used;
+        uint64_t aadlen, textlen;
+        int active;
+    } serial;
 };
 
 static const uint64_t poly_[2] __attribute__((aligned(16))) = {1, 0xc200000000000000};
@@ -1212,6 +1219,7 @@ static void aesgcm_dispose_crypto(ptls_aead_context_t *_ctx)
 {
     struct aesgcm_context *ctx = (struct aesgcm_context *)_ctx;
 
+    ptls_clear_memory(&ctx->serial, sizeof(ctx->serial));
     ptls_fusion_aesgcm_free(ctx->aesgcm);
     ctx->aesgcm = NULL;
     if (ctx->scratch != NULL) {
@@ -1273,6 +1281,214 @@ static inline __m128i calc_counter(struct aesgcm_context *ctx, uint64_t seq)
     ctr = _mm_slli_si128(ctr, 4);
     ctr = _mm_xor_si128(ctx->static_iv, ctr);
     return ctr;
+}
+
+/* The serial path never allocates or reads outside the supplied destination span. */
+static void serial_hash(struct aesgcm_context *ctx, __m128i block)
+{
+    __m128i h = ctx->aesgcm->ecb.aesni256
+                    ? ((struct ptls_fusion_aesgcm_context256 *)ctx->aesgcm)->ghash[0].H[1]
+                    : ((struct ptls_fusion_aesgcm_context128 *)ctx->aesgcm)->ghash[0].H;
+    ctx->serial.hash = gfmul(_mm_xor_si128(ctx->serial.hash, _mm_shuffle_epi8(block, byteswap128)), h);
+}
+
+static int serial_error(struct aesgcm_context *ctx)
+{
+    ptls_clear_memory(&ctx->serial, sizeof(ctx->serial));
+    return PTLS_ERROR_LIBRARY;
+}
+
+int ptls_fusion_aead_enc_begin(ptls_aead_context_t *_ctx, uint64_t seq, const void *_aad, size_t aadlen)
+{
+    struct aesgcm_context *ctx = (void *)_ctx;
+    const uint8_t *aad = _aad;
+    ptls_clear_memory(&ctx->serial, sizeof(ctx->serial));
+    if (aadlen > UINT64_MAX / 8 || (aadlen != 0 && aad == NULL))
+        return serial_error(ctx);
+    ctx->serial.aadlen = aadlen;
+    ctx->serial.ctr = _mm_insert_epi32(calc_counter(ctx, seq), 1, 0);
+    ctx->serial.j0 = _mm_shuffle_epi8(ctx->serial.ctr, byteswap128);
+    ctx->serial.bit_used = 16;
+    ctx->serial.active = 1;
+    while (aadlen >= 16) {
+        serial_hash(ctx, _mm_loadu_si128((const void *)aad));
+        aad += 16;
+        aadlen -= 16;
+    }
+    if (aadlen != 0) {
+        uint8_t block[16] = {0};
+        memcpy(block, aad, aadlen);
+        serial_hash(ctx, _mm_loadu_si128((const void *)block));
+    }
+    return 0;
+}
+
+/* Full-block kernel keeps six AES pipelines in flight, using the selected expanded keys. */
+static void serial_blocks(struct aesgcm_context *ctx, uint8_t *dst, const uint8_t *src, int wide, int decrypt)
+{
+    ptls_fusion_aesecb_context_t *ecb = &ctx->aesgcm->ecb;
+    if (wide) {
+        struct ptls_fusion_aesgcm_context256 *gctx = (void *)ctx->aesgcm;
+        struct ptls_fusion_gfmul_state256 gstate = {.lo = _mm256_zextsi128_si256(ctx->serial.hash)};
+        __m256i bits[6];
+        for (size_t i = 0; i != 6; ++i) {
+            ctx->serial.ctr = _mm_add_epi32(ctx->serial.ctr, _mm_set_epi32(0, 0, 0, 1));
+            __m128i first = _mm_shuffle_epi8(ctx->serial.ctr, byteswap128);
+            ctx->serial.ctr = _mm_add_epi32(ctx->serial.ctr, _mm_set_epi32(0, 0, 0, 1));
+            bits[i] = _mm256_inserti128_si256(_mm256_castsi128_si256(first),
+                                            _mm_shuffle_epi8(ctx->serial.ctr, byteswap128), 1);
+            bits[i] = _mm256_xor_si256(bits[i], ecb->keys.m256[0]);
+        }
+        for (size_t r = 1; r < ecb->rounds; ++r)
+            for (size_t i = 0; i != 6; ++i)
+                bits[i] = _mm256_aesenc_epi128(bits[i], ecb->keys.m256[r]);
+        for (size_t i = 0; i != 6; ++i) {
+            __m256i enc = _mm256_xor_si256(_mm256_aesenclast_epi128(bits[i], ecb->keys.m256[ecb->rounds]),
+                                         _mm256_loadu_si256((const void *)(src + 32 * i)));
+            __m256i auth = decrypt ? _mm256_loadu_si256((const void *)(src + 32 * i)) : enc;
+            if (ctx->super.algo->non_temporal && ((uintptr_t)(dst + 32 * i) & 31) == 0)
+                _mm256_stream_si256((void *)(dst + 32 * i), enc);
+            else
+                _mm256_storeu_si256((void *)(dst + 32 * i), enc);
+            if (i == 0)
+                gfmul_firststep256(&gstate, auth, 0, gctx->ghash + 5);
+            else
+                gfmul_nextstep256(&gstate, auth, gctx->ghash + 5 - i);
+        }
+        gfmul_reduce256(&gstate);
+        ctx->serial.hash = _mm256_castsi256_si128(gstate.lo);
+    } else {
+        struct ptls_fusion_aesgcm_context128 *gctx = (void *)ctx->aesgcm;
+        struct ptls_fusion_gfmul_state128 gstate = {.lo = ctx->serial.hash};
+        __m128i bits[6];
+        for (size_t i = 0; i != 6; ++i) {
+            ctx->serial.ctr = _mm_add_epi32(ctx->serial.ctr, _mm_set_epi32(0, 0, 0, 1));
+            bits[i] = _mm_xor_si128(_mm_shuffle_epi8(ctx->serial.ctr, byteswap128), ecb->keys.m128[0]);
+        }
+        for (size_t r = 1; r < ecb->rounds; ++r)
+            for (size_t i = 0; i != 6; ++i)
+                bits[i] = _mm_aesenc_si128(bits[i], ecb->keys.m128[r]);
+        for (size_t i = 0; i != 6; ++i) {
+            __m128i enc = _mm_xor_si128(_mm_aesenclast_si128(bits[i], ecb->keys.m128[ecb->rounds]),
+                                      _mm_loadu_si128((const void *)(src + 16 * i)));
+            __m128i auth = decrypt ? _mm_loadu_si128((const void *)(src + 16 * i)) : enc;
+            if (ctx->super.algo->non_temporal && ((uintptr_t)(dst + 16 * i) & 15) == 0)
+                _mm_stream_si128((void *)(dst + 16 * i), enc);
+            else
+                _mm_storeu_si128((void *)(dst + 16 * i), enc);
+            if (i == 0)
+                gfmul_firststep128(&gstate, auth, gctx->ghash + 5);
+            else
+                gfmul_nextstep128(&gstate, auth, gctx->ghash + 5 - i);
+        }
+        gfmul_reduce128(&gstate);
+        ctx->serial.hash = gstate.lo;
+    }
+}
+
+static int serial_chunk(ptls_aead_context_t *_ctx, void *_output, const void *_input, size_t length, size_t *written,
+                        int decrypt)
+{
+    struct aesgcm_context *ctx = (void *)_ctx;
+    uint8_t *dst = _output;
+    const uint8_t *src = _input;
+    *written = 0;
+    if (!ctx->serial.active || length > UINT64_MAX / 8 - ctx->serial.textlen ||
+        (length != 0 && (dst == NULL || src == NULL)))
+        return serial_error(ctx);
+    ctx->serial.textlen += length;
+    size_t left = length, batch = ctx->aesgcm->ecb.aesni256 ? 192 : 96;
+    while (left != 0) {
+        if (ctx->serial.bit_used == 16 && left >= batch) {
+            serial_blocks(ctx, dst, src, ctx->aesgcm->ecb.aesni256, decrypt);
+            dst += batch;
+            src += batch;
+            left -= batch;
+            continue;
+        }
+        if (ctx->serial.bit_used == 16) {
+            ctx->serial.ctr = _mm_add_epi32(ctx->serial.ctr, _mm_set_epi32(0, 0, 0, 1));
+            _mm_storeu_si128((void *)ctx->serial.bits,
+                            aesecb_encrypt(&ctx->aesgcm->ecb, _mm_shuffle_epi8(ctx->serial.ctr, byteswap128)));
+            ctx->serial.bit_used = 0;
+        }
+        size_t n = 16 - ctx->serial.bit_used;
+        if (n > left)
+            n = left;
+        for (size_t i = 0; i != n; ++i) {
+            uint8_t c = src[i];
+            uint8_t p = c ^ ctx->serial.bits[ctx->serial.bit_used++];
+            dst[i] = p;
+            ctx->serial.carry[ctx->serial.carry_used++] = decrypt ? c : p;
+        }
+        if (ctx->serial.carry_used == 16) {
+            serial_hash(ctx, _mm_loadu_si128((const void *)ctx->serial.carry));
+            ctx->serial.carry_used = 0;
+        }
+        dst += n;
+        src += n;
+        left -= n;
+    }
+    if (ctx->super.algo->non_temporal)
+        _mm_sfence();
+    *written = length;
+    return 0;
+}
+
+int ptls_fusion_aead_enc_chunk(ptls_aead_context_t *ctx, void *output, const void *input, size_t length, size_t *written)
+{
+    return serial_chunk(ctx, output, input, length, written, 0);
+}
+
+int ptls_fusion_aead_dec_chunk(ptls_aead_context_t *ctx, void *output, size_t capacity,
+                              const void *input, size_t length, size_t *written)
+{
+    *written = 0;
+    if (length > capacity)
+        return serial_error((void *)ctx);
+    return serial_chunk(ctx, output, input, length, written, 1);
+}
+
+int ptls_fusion_aead_enc_end(ptls_aead_context_t *_ctx, void *output, size_t capacity, size_t *written)
+{
+    struct aesgcm_context *ctx = (void *)_ctx;
+    *written = 0;
+    if (!ctx->serial.active || capacity < 16 || output == NULL)
+        return serial_error(ctx);
+    if (ctx->serial.carry_used != 0) {
+        memset(ctx->serial.carry + ctx->serial.carry_used, 0, 16 - ctx->serial.carry_used);
+        serial_hash(ctx, _mm_loadu_si128((const void *)ctx->serial.carry));
+    }
+    __m128i lengths = _mm_set_epi64x(ctx->serial.aadlen * 8, ctx->serial.textlen * 8);
+    serial_hash(ctx, _mm_shuffle_epi8(lengths, byteswap128));
+    _mm_storeu_si128(output, _mm_xor_si128(_mm_shuffle_epi8(ctx->serial.hash, byteswap128),
+                                         aesecb_encrypt(&ctx->aesgcm->ecb, ctx->serial.j0)));
+    ptls_clear_memory(&ctx->serial, sizeof(ctx->serial));
+    *written = 16;
+    return 0;
+}
+
+int ptls_fusion_aead_dec_begin(ptls_aead_context_t *ctx, uint64_t seq, const void *aad, size_t aadlen)
+{
+    return ptls_fusion_aead_enc_begin(ctx, seq, aad, aadlen);
+}
+
+int ptls_fusion_aead_dec_end(ptls_aead_context_t *ctx, const void *tag, size_t taglen)
+{
+    uint8_t expected[16];
+    size_t written;
+    if (tag == NULL || taglen != sizeof(expected))
+        return serial_error((void *)ctx);
+    int ret = ptls_fusion_aead_enc_end(ctx, expected, sizeof(expected), &written);
+    if (ret == 0 && !ptls_mem_equal(expected, tag, sizeof(expected)))
+        ret = PTLS_ALERT_BAD_RECORD_MAC;
+    ptls_clear_memory(expected, sizeof(expected));
+    return ret;
+}
+
+void ptls_fusion_aead_dec_abort(ptls_aead_context_t *ctx)
+{
+    serial_error((void *)ctx);
 }
 
 void aead_do_encrypt(struct st_ptls_aead_context_t *_ctx, void *output, const void *input, size_t inlen, uint64_t seq,
@@ -1374,6 +1590,14 @@ static int aesgcm_setup(ptls_aead_context_t *_ctx, int is_enc, const void *key, 
 {
     struct aesgcm_context *ctx = (struct aesgcm_context *)_ctx;
 
+    memset(&ctx->serial, 0, sizeof(ctx->serial));
+    ctx->super.do_enc_begin = is_enc ? ptls_fusion_aead_enc_begin : NULL;
+    ctx->super.do_enc_chunk = is_enc ? ptls_fusion_aead_enc_chunk : NULL;
+    ctx->super.do_enc_end = is_enc ? ptls_fusion_aead_enc_end : NULL;
+    ctx->super.do_dec_begin = is_enc ? NULL : ptls_fusion_aead_dec_begin;
+    ctx->super.do_dec_chunk = is_enc ? NULL : ptls_fusion_aead_dec_chunk;
+    ctx->super.do_dec_end = is_enc ? NULL : ptls_fusion_aead_dec_end;
+    ctx->super.do_dec_abort = is_enc ? NULL : ptls_fusion_aead_dec_abort;
     ctx->scratch = NULL;
     ctx->scratch_capacity = 0;
     ctx->static_iv = loadn128(iv, PTLS_AESGCM_IV_SIZE);
@@ -1432,7 +1656,9 @@ ptls_aead_algorithm_t ptls_fusion_aes128gcm = {"AES128-GCM",
                                                0,
                                                0,
                                                sizeof(struct aesgcm_context),
-                                               aes128gcm_setup};
+                                               aes128gcm_setup,
+                                                1,
+                                                1};
 ptls_aead_algorithm_t ptls_fusion_aes256gcm = {"AES256-GCM",
                                                PTLS_AESGCM_CONFIDENTIALITY_LIMIT,
                                                PTLS_AESGCM_INTEGRITY_LIMIT,
@@ -1445,7 +1671,9 @@ ptls_aead_algorithm_t ptls_fusion_aes256gcm = {"AES256-GCM",
                                                0,
                                                0,
                                                sizeof(struct aesgcm_context),
-                                               aes256gcm_setup};
+                                               aes256gcm_setup,
+                                                1,
+                                                1};
 
 static inline void reduce_aad128(struct ptls_fusion_gfmul_state128 *gstate, struct ptls_fusion_aesgcm_ghash_precompute128 *ghash,
                                  const void *_aad, size_t aadlen)
@@ -2296,6 +2524,14 @@ static int non_temporal_setup(ptls_aead_context_t *_ctx, int is_enc, const void 
     struct aesgcm_context *ctx = (struct aesgcm_context *)_ctx;
     int aesni256 = is_enc && ptls_fusion_can_aesni256;
 
+    memset(&ctx->serial, 0, sizeof(ctx->serial));
+    ctx->super.do_enc_begin = is_enc ? ptls_fusion_aead_enc_begin : NULL;
+    ctx->super.do_enc_chunk = is_enc ? ptls_fusion_aead_enc_chunk : NULL;
+    ctx->super.do_enc_end = is_enc ? ptls_fusion_aead_enc_end : NULL;
+    ctx->super.do_dec_begin = is_enc ? NULL : ptls_fusion_aead_dec_begin;
+    ctx->super.do_dec_chunk = is_enc ? NULL : ptls_fusion_aead_dec_chunk;
+    ctx->super.do_dec_end = is_enc ? NULL : ptls_fusion_aead_dec_end;
+    ctx->super.do_dec_abort = is_enc ? NULL : ptls_fusion_aead_dec_abort;
     ctx->scratch = NULL;
     ctx->scratch_capacity = 0;
     ctx->static_iv = loadn128(iv, PTLS_AESGCM_IV_SIZE);
@@ -2352,7 +2588,9 @@ ptls_aead_algorithm_t ptls_non_temporal_aes128gcm = {"AES128-GCM",
                                                      1,
                                                      PTLS_X86_CACHE_LINE_ALIGN_BITS,
                                                      sizeof(struct aesgcm_context),
-                                                     non_temporal_aes128gcm_setup};
+                                                     non_temporal_aes128gcm_setup,
+                                                      1,
+                                                      1};
 ptls_aead_algorithm_t ptls_non_temporal_aes256gcm = {"AES256-GCM",
                                                      PTLS_AESGCM_CONFIDENTIALITY_LIMIT,
                                                      PTLS_AESGCM_INTEGRITY_LIMIT,
@@ -2365,7 +2603,9 @@ ptls_aead_algorithm_t ptls_non_temporal_aes256gcm = {"AES256-GCM",
                                                      1,
                                                      PTLS_X86_CACHE_LINE_ALIGN_BITS,
                                                      sizeof(struct aesgcm_context),
-                                                     non_temporal_aes256gcm_setup};
+                                                     non_temporal_aes256gcm_setup,
+                                                      1,
+                                                      1};
 
 struct fusion_quiclb_context {
     ptls_cipher_context_t super;

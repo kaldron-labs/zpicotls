@@ -757,8 +757,117 @@ static void test_generated_all(ptls_aead_algorithm_t *e1, ptls_aead_algorithm_t 
     subtest("set-capacity", test_generated_set_capacity);
 }
 
+static void test_serial_aead(ptls_aead_algorithm_t *algo)
+{
+    uint8_t key[32], iv[12], aad[33], input[16385], ref[sizeof(input) + 16];
+    uint8_t store[sizeof(input) + 16 + 64], plain[sizeof(input)];
+    fill_deterministic_bytes(key, sizeof(key), 71);
+    fill_deterministic_bytes(iv, sizeof(iv), 72);
+    fill_deterministic_bytes(aad, sizeof(aad), 73);
+    fill_deterministic_bytes(input, sizeof(input), 74);
+    ptls_aead_context_t *enc = ptls_aead_new_direct(algo, 1, key, iv);
+    ptls_aead_algorithm_t *refalgo = algo->key_size == 16 ? &ptls_minicrypto_aes128gcm : &ptls_minicrypto_aes256gcm;
+    size_t pool_capacity = ((struct aesgcm_context *)enc)->aesgcm->capacity;
+    ptls_aead_context_t *reference = ptls_aead_new_direct(refalgo, 1, key, iv);
+    ptls_aead_context_t *dec = ptls_aead_new_direct(refalgo, 0, key, iv);
+    ptls_aead_context_t *streamdec = ptls_aead_new_direct(algo, 0, key, iv);
+    ok(streamdec->do_dec_begin && streamdec->do_dec_chunk && streamdec->do_dec_end && streamdec->do_dec_abort);
+    ok(enc->do_enc_begin != NULL && enc->do_enc_chunk != NULL && enc->do_enc_end != NULL);
+    /* Every split near blocks, with all AAD padding positions and unaligned destinations. */
+    for (size_t a = 0; a <= sizeof(aad); ++a) {
+        for (size_t split = 0; split <= 257; ++split) {
+            size_t written, len = 257;
+            uint8_t *out = store + 1 + split % 31;
+            memset(store, 0xa5, sizeof(store));
+            ptls_aead_encrypt(reference, ref, input, len, 1234567, aad, a);
+            int ret = enc->do_enc_begin(enc, 1234567, aad, a);
+            ret |= enc->do_enc_chunk(enc, out, input, split, &written);
+            ret |= written != split;
+            ret |= enc->do_enc_chunk(enc, out + split, input + split, len - split, &written);
+            ret |= written != len - split;
+            ret |= enc->do_enc_end(enc, out + len, 16, &written);
+            ret |= written != 16;
+            ok(ret == 0 && memcmp(ref, out, len + 16) == 0);
+            ok(out[-1] == 0xa5 && out[len + 16] == 0xa5);
+            memset(plain, 0xa5, sizeof(plain));
+            ret = streamdec->do_dec_begin(streamdec, 1234567, aad, a);
+            ret |= streamdec->do_dec_chunk(streamdec, plain + 1, split, ref, split, &written);
+            ret |= written != split;
+            ret |= streamdec->do_dec_chunk(streamdec, plain + 1 + split, len - split,
+                                           ref + split, len - split, &written);
+            ret |= written != len - split;
+            ret |= streamdec->do_dec_end(streamdec, ref + len, 16);
+            ok(ret == 0 && memcmp(plain + 1, input, len) == 0);
+            ok(plain[0] == 0xa5 && plain[len + 1] == 0xa5);
+        }
+    }
+    /* Record-sized input, tiny spans, aligned full-block kernels, and consecutive operations. */
+    for (size_t n = 0; n <= 16385; n = n == 0 ? 1 : n == 1 ? 1460 : n == 1460 ? 16384 : n + 1) {
+        for (size_t span = 1; span <= 1500; span = span == 1 ? 15 : span == 15 ? 16 : span == 16 ? 97 : 1500) {
+            size_t written;
+            uint8_t *out = store + 32;
+            int ret = enc->do_enc_begin(enc, n + span, aad, sizeof(aad));
+            ptls_aead_encrypt(reference, ref, input, n, n + span, aad, sizeof(aad));
+            for (size_t off = 0; off < n;) {
+                size_t len = n - off < span ? n - off : span;
+                ret |= enc->do_enc_chunk(enc, out + off, input + off, len, &written);
+                ret |= written != len;
+                off += len;
+            }
+            ret |= enc->do_enc_end(enc, out + n, 16, &written);
+            ok(ret == 0 && written == 16 && memcmp(ref, out, n + 16) == 0);
+            ok(ptls_aead_decrypt(dec, plain, out, n + 16, n + span, aad, sizeof(aad)) == n);
+            ok(memcmp(plain, input, n) == 0);
+            ret = streamdec->do_dec_begin(streamdec, n + span, aad, sizeof(aad));
+            for (size_t off = 0; off < n;) {
+                size_t len = n - off < span ? n - off : span;
+                ret |= streamdec->do_dec_chunk(streamdec, plain + off, n - off, ref + off, len, &written);
+                ret |= written != len;
+                off += len;
+            }
+            ret |= streamdec->do_dec_end(streamdec, ref + n, 16);
+            ok(ret == 0 && memcmp(plain, input, n) == 0);
+            if (span == 1500)
+                break;
+        }
+    }
+    size_t written = 123;
+    ok(enc->do_enc_chunk(enc, store, input, 1, &written) == PTLS_ERROR_LIBRARY && written == 0);
+    ok(enc->do_enc_begin(enc, 1, aad, 3) == 0);
+    ok(enc->do_enc_end(enc, store, 15, &written) == PTLS_ERROR_LIBRARY && written == 0);
+    ok(enc->do_enc_end(enc, store, 16, &written) == PTLS_ERROR_LIBRARY && written == 0);
+    ok(enc->do_enc_begin(enc, 2, aad, 3) == 0);
+    ok(enc->do_enc_chunk(enc, NULL, input, 1, &written) == PTLS_ERROR_LIBRARY && written == 0);
+    ok(enc->do_enc_end(enc, store, 16, &written) == PTLS_ERROR_LIBRARY && written == 0);
+    ok(((struct aesgcm_context *)enc)->scratch == NULL);
+    ok(((struct aesgcm_context *)enc)->aesgcm->capacity == pool_capacity);
+    /* Authentication failure and capacity rejection terminate a private operation. */
+    ptls_aead_encrypt(reference, ref, input, 257, 42, aad, sizeof(aad));
+    ok(streamdec->do_dec_begin(streamdec, 42, aad, sizeof(aad)) == 0);
+    ok(streamdec->do_dec_chunk(streamdec, plain, sizeof(plain), ref, 257, &written) == 0 && written == 257);
+    ref[257] ^= 1;
+    ok(streamdec->do_dec_end(streamdec, ref + 257, 16) == PTLS_ALERT_BAD_RECORD_MAC);
+    ok(streamdec->do_dec_chunk(streamdec, plain, sizeof(plain), ref, 1, &written) == PTLS_ERROR_LIBRARY && written == 0);
+    ptls_aead_free(streamdec);
+    streamdec = ptls_aead_new_direct(algo, 0, key, iv);
+    ok(streamdec->do_dec_begin(streamdec, 42, aad, sizeof(aad)) == 0);
+    memset(plain, 0xa5, sizeof(plain));
+    ok(streamdec->do_dec_chunk(streamdec, plain, 1, ref, 2, &written) == PTLS_ERROR_LIBRARY && written == 0);
+    ok(plain[0] == 0xa5 && plain[1] == 0xa5);
+    ptls_aead_free(streamdec);
+    streamdec = ptls_aead_new_direct(algo, 0, key, iv);
+    ok(streamdec->do_dec_begin(streamdec, 42, aad, sizeof(aad)) == 0);
+    streamdec->do_dec_abort(streamdec);
+    ok(streamdec->do_dec_end(streamdec, ref + 257, 16) == PTLS_ERROR_LIBRARY);
+    ptls_aead_free(streamdec);
+    ptls_aead_free(enc);
+    ptls_aead_free(reference);
+    ptls_aead_free(dec);
+}
+
 static void test_fusion_aes128gcm(void)
 {
+    test_serial_aead(&ptls_fusion_aes128gcm);
     test_generated_all(&ptls_fusion_aes128gcm, &ptls_minicrypto_aes128gcm, 1);
     test_deterministic_multivec(&ptls_fusion_aes128gcm, &ptls_minicrypto_aes128gcm);
     /* White-box expectation: ordinary Fusion _v_s routes through fusion_aesgcm_encrypt_iter, not aead_do_encrypt_v. */
@@ -767,6 +876,7 @@ static void test_fusion_aes128gcm(void)
 
 static void test_fusion_aes256gcm(void)
 {
+    test_serial_aead(&ptls_fusion_aes256gcm);
     test_generated_all(&ptls_fusion_aes256gcm, &ptls_minicrypto_aes256gcm, 1);
     test_deterministic_multivec(&ptls_fusion_aes256gcm, &ptls_minicrypto_aes256gcm);
     test_encrypt_v_s_matrix(&ptls_fusion_aes256gcm, &ptls_minicrypto_aes256gcm);
@@ -780,12 +890,14 @@ static void test_fusion_aesgcm(void)
 
 static void test_non_temporal_aes128gcm(void)
 {
+    test_serial_aead(&ptls_non_temporal_aes128gcm);
     test_generated_all(&ptls_non_temporal_aes128gcm, &ptls_minicrypto_aes128gcm, 1);
     test_encrypt_v_s_matrix(&ptls_non_temporal_aes128gcm, &ptls_minicrypto_aes128gcm);
 }
 
 static void test_non_temporal_aes256gcm(void)
 {
+    test_serial_aead(&ptls_non_temporal_aes256gcm);
     test_generated_all(&ptls_non_temporal_aes256gcm, &ptls_minicrypto_aes256gcm, 1);
     test_encrypt_v_s_matrix(&ptls_non_temporal_aes256gcm, &ptls_minicrypto_aes256gcm);
 }

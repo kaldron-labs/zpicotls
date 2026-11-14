@@ -1,0 +1,18 @@
+act as a skeptical principal software engineer, scrutinize all uncommitted work
+- scrutinize departures from canonical `picotls` convention and consistency with upstream
+  - facilitating merging of upstream security fixes and feature is a goal
+  - `zpicotls` should only diverge from canonical `picotls` to the extent necessary to support Z's requirements
+- scrutinize all new in-memory containers
+  - can they be replaced by better code algorithms?
+  - can they be made leaner or simpler?
+  - can multiple containers be consolidated into fewer?
+- scrutinize all transforming/parsing/building/formatting/marshalling/unmarshalling
+  - are any of these operations redundantly repeated?
+  - can any operations be elided by retaining and re-using outputs?
+  - can mutations be performed in-place (overwriting) to avoid unnecessary copying?
+  - do these operations make use of the correct library capabilities?
+- scrutinize all copies and heap allocations
+  - can the copy be elided?
+  - should in-place mutation be used?
+  - can the allocation be replaced by on-stack scratch storage?
+- write all findings to `findings.md`
