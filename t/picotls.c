@@ -1838,6 +1838,11 @@ static int on_save_ticket(ptls_save_ticket_t *self, ptls_t *tls, ptls_iovec_t sr
     return 0;
 }
 
+static uint64_t resumption_get_time(ptls_get_time_t *self)
+{
+    return 1500000000000;
+}
+
 static void test_resumption_impl(int different_preferred_key_share, int require_client_authentication, int use_ticket_request,
                                  int transfer_session)
 {
@@ -1854,6 +1859,11 @@ static void test_resumption_impl(int different_preferred_key_share, int require_
         ctx->ticket_requests.client.new_session_count = 3;
         ctx->ticket_requests.client.resumption_count = 2;
     }
+
+    /* Ticket delivery delays must not change the age skew in these acceptance tests. */
+    ptls_get_time_t fixed_time = {resumption_get_time};
+    ptls_get_time_t *client_time = ctx->get_time, *server_time = ctx_peer->get_time;
+    ctx->get_time = ctx_peer->get_time = &fixed_time;
 
     ptls_encrypt_ticket_t et = {on_copy_ticket};
     ptls_save_ticket_t st = {on_save_ticket};
@@ -1915,6 +1925,8 @@ static void test_resumption_impl(int different_preferred_key_share, int require_
     ctx_peer->encrypt_ticket = NULL;
     ctx->save_ticket = NULL;
     ctx->key_exchanges = key_exchanges_orig;
+    ctx->get_time = client_time;
+    ctx_peer->get_time = server_time;
 }
 
 static void test_resumption(int different_preferred_key_share, int require_client_authentication)
@@ -2014,11 +2026,11 @@ static int stream_test_call(struct stream_test_endpoint *ep, const void *input, 
     int committed = ep->committed;
     int ret = ptls_receive_stream(ep->tls, &plain, &output, input, length, properties);
     if (ret == PTLS_ERROR_IN_PROGRESS && ep->tls->stream_rec.encrypted) {
-        assert(ep->tls->state == state && ep->tls->traffic_protection.dec.seq == seq);
-        assert(ep->committed == committed); /* No provisional application or protocol dispatch. */
+        ok(ep->tls->state == state && ep->tls->traffic_protection.dec.seq == seq);
+        ok(ep->committed == committed); /* No provisional application or protocol dispatch. */
     }
     /* In particular, encrypted handshake fragmentation must not enter parse_record's gather buffer. */
-    assert(ep->tls->recvbuf.rec.base == NULL);
+    ok(ep->tls->recvbuf.rec.base == NULL);
     return ret;
 }
 static int stream_test_feed(struct stream_test_endpoint *ep, const void *input, size_t *length, size_t step,
