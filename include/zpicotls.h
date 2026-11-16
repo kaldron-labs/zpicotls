@@ -235,6 +235,7 @@ extern "C" {
 #define PTLS_ALERT_CLOSE_NOTIFY 0
 #define PTLS_ALERT_UNEXPECTED_MESSAGE 10
 #define PTLS_ALERT_BAD_RECORD_MAC 20
+#define PTLS_ALERT_RECORD_OVERFLOW 22
 #define PTLS_ALERT_HANDSHAKE_FAILURE 40
 #define PTLS_ALERT_BAD_CERTIFICATE 42
 #define PTLS_ALERT_UNSUPPORTED_CERTIFICATE 43
@@ -351,6 +352,17 @@ typedef struct st_ptls_iovec_t {
 /**
  * used for storing output
  */
+#define PTLS_HAVE_RECORD_CHUNKS 1
+
+typedef struct st_ptls_record_sink_t {
+    void *ctx;
+    int (*reserve)(void *ctx, size_t wire_size);
+    int (*next)(void *ctx, void **base, size_t *capacity);
+    int (*commit)(void *ctx, size_t length);
+    int (*finish)(void *ctx);
+    void (*discard)(void *ctx);
+} ptls_record_sink_t;
+
 typedef struct st_ptls_buffer_t {
     uint8_t *base;
     void *origin;         /* origin, NULL for internal, distinguishes application buffer from internal */
@@ -359,6 +371,7 @@ typedef struct st_ptls_buffer_t {
     uint8_t is_allocated; /* boolean */
     uint8_t align_bits;   /* if particular alignment is required, set to log2(alignment); otherwize zero */
     uint8_t tx;           /* direction: 0 for receive-side, 1 for transmit-side */
+    ptls_record_sink_t *record_sink; /* internal synchronous record destination, otherwise NULL */
 } ptls_buffer_t;
 
 /**
@@ -475,6 +488,18 @@ typedef struct st_ptls_aead_context_t {
      * Mandatory callback that disposes of all the backend-specific data.
      */
     void (*dispose_crypto)(struct st_ptls_aead_context_t *ctx);
+    /* Optional checked serial encryption. A chunk writes exactly its input length; end writes only the tag. */
+    int (*do_enc_begin)(struct st_ptls_aead_context_t *ctx, uint64_t seq, const void *aad, size_t aadlen);
+    int (*do_enc_chunk)(struct st_ptls_aead_context_t *ctx, void *output, const void *input, size_t length, size_t *written);
+    int (*do_enc_end)(struct st_ptls_aead_context_t *ctx, void *output, size_t capacity, size_t *written);
+
+    /* Checked serial decryption: output is provisional until do_dec_end authenticates the tag.
+     * Supported providers write exactly length bytes per chunk; no unbounded provider buffering. */
+    int (*do_dec_begin)(struct st_ptls_aead_context_t *ctx, uint64_t seq, const void *aad, size_t aadlen);
+    int (*do_dec_chunk)(struct st_ptls_aead_context_t *ctx, void *output, size_t capacity,
+                        const void *input, size_t length, size_t *written);
+    int (*do_dec_end)(struct st_ptls_aead_context_t *ctx, const void *tag, size_t taglen);
+    void (*do_dec_abort)(struct st_ptls_aead_context_t *ctx);
     /**
      * Mandatory callback that returns the static IV. The size of IV is available as `ptls_aead_algorithm_t::iv_size`.
      */
@@ -589,6 +614,10 @@ typedef const struct st_ptls_aead_algorithm_t {
      * A non-zero return value indicates failure, in which case the error will propagate as `ptls_aead_new` returning NULL.
      */
     int (*setup_crypto)(ptls_aead_context_t *ctx, int is_enc, const void *key, const void *iv);
+    /** Serial callback capabilities. Providers advertising a capability must install its complete callback set.
+     * Wrappers that remove callbacks must clear the corresponding capability. */
+    unsigned serial_encrypt : 1;
+    unsigned serial_decrypt : 1;
 } ptls_aead_algorithm_t;
 
 /**
@@ -1801,7 +1830,54 @@ void ptls_tx_free(ptls_tx_t *tx);
 /**
  * encrypts application data using detached outbound record-protection state
  */
+/* All chunks output APIs: reserve failure leaves outbound state retryable. After a successful
+ * reserve, any emission or finish failure makes outbound state terminal: subsequent chunks and
+ * contiguous sends fail with PTLS_ERROR_LIBRARY. Discard must retract the entire reservation;
+ * commit only advances private output, and finish publishes it. Never retry a terminal Tx.
+ * Handshake/receive callers must tear down the connection on errors other than their documented
+ * IN_PROGRESS / ASYNC_OPERATION continuations; prior records may already have been published. */
+int ptls_tx_send_chunks(ptls_tx_t *tx, ptls_record_sink_t *sink, const void *input, size_t length);
+int ptls_tx_key_chunks(ptls_tx_t *tx, ptls_record_sink_t *sink, int request_update);
+int ptls_tx_alert_chunks(ptls_tx_t *tx, ptls_record_sink_t *sink, uint8_t level, uint8_t description);
+int ptls_handshake_chunks(ptls_t *tls, ptls_record_sink_t *sink, const void *input, size_t *length,
+                          ptls_handshake_properties_t *properties);
+int ptls_recv_chunks(ptls_t *tls, ptls_buffer_t *plaintext, ptls_record_sink_t *sink, const void *input, size_t *length);
+
+/** Maximum private record output: the supported encrypted record bound minus its tag.
+ * Reserve the full encrypted bound to cover every supported tag size and TLS 1.3 inner padding.
+ * The application-visible extent is always limited to PTLS_RECEIVE_APPLICATION_CAPACITY. */
+#define PTLS_HAVE_RECEIVE_STREAM 1
+#define PTLS_RECEIVE_APPLICATION_CAPACITY 16384
+#define PTLS_RECEIVE_RECORD_CAPACITY (16384 + 256)
+typedef struct st_ptls_plaintext_sink_t {
+    void *ctx;
+    int (*reserve)(void *ctx, size_t size, void **base, size_t *capacity);
+    int (*commit)(void *ctx, size_t application_length);
+    void (*discard)(void *ctx);
+} ptls_plaintext_sink_t;
+/**
+ * Incremental record receive. Consumes exactly *length bytes on return; zero means a record
+ * boundary was reached, IN_PROGRESS means more input is needed, ASYNC_OPERATION suspends the
+ * handshake. Other values are terminal. Calls may contain empty input. Use handshake_is_complete
+ * to observe handshake completion. The initial ClientHello / async continuation uses empty input.
+ * No application callback may run from a sink callback; deliver committed output after return.
+ * Sink callbacks must not throw through this C API. The reserved pointer and callback context
+ * remain valid until commit/discard, including across calls and until ptls_free on teardown.
+ * Encrypted input is never accumulated: only header, explicit IV and tag have fixed carry storage.
+ */
+int ptls_receive_stream(ptls_t *tls, ptls_plaintext_sink_t *plaintext, ptls_record_sink_t *output,
+                        const void *input, size_t *length, ptls_handshake_properties_t *properties);
+/* Validate all configured receive providers before accepting traffic. */
+int ptls_receive_stream_check(ptls_t *tls);
+
 int ptls_tx_send(ptls_tx_t *tx, ptls_buffer_t *sendbuf, const void *input, size_t inlen);
+/**
+ * Encrypts up to 16384 bytes of immutable source spans into one application-data record, optionally preceded by KeyUpdate.
+ * `input` points to incnt + 1 writable iovecs; the final entry is scratch for TLS 1.3's content type. Payload bytes are never
+ * gathered or modified. The caller splits larger logical input at record boundaries. Contiguous transmission is unchanged.
+ */
+#define PTLS_HAVE_TX_SENDV 1
+int ptls_tx_sendv(ptls_tx_t *tx, ptls_buffer_t *sendbuf, ptls_iovec_t *input, size_t incnt);
 /**
  * emits a KeyUpdate using the current key and installs the next outbound key before returning
  */
@@ -2176,6 +2252,7 @@ inline void ptls_buffer_init(ptls_buffer_t *buf, void *smallbuf, size_t smallbuf
     buf->is_allocated = 0;
     buf->align_bits = 0;
     buf->tx = (uint8_t)tx;
+    buf->record_sink = NULL;
 }
 
 inline void ptls_buffer_init_rx(ptls_buffer_t *buf, void *smallbuf, size_t smallbuf_size)

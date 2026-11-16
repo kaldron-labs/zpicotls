@@ -537,6 +537,123 @@ Exit:
 
 #endif
 
+static void test_serial_aead(ptls_aead_algorithm_t *algo)
+{
+    uint8_t key[32], iv[12], aad[33], input[16385], ref[sizeof(input) + 16];
+    uint8_t output[sizeof(input) + 18], plain[sizeof(input)];
+    memset(key, 0x43, sizeof(key));
+    memset(iv, 0x17, sizeof(iv));
+    memset(aad, 0x3b, sizeof(aad));
+    for (size_t i = 0; i != sizeof(input); ++i)
+        input[i] = (uint8_t)(i * 31 + 7);
+    ptls_aead_context_t *enc = ptls_aead_new_direct(algo, 1, key, iv);
+    ptls_aead_context_t *one = ptls_aead_new_direct(algo, 1, key, iv);
+    ptls_aead_context_t *dec = ptls_aead_new_direct(algo, 0, key, iv);
+    ptls_aead_context_t *streamdec = ptls_aead_new_direct(algo, 0, key, iv);
+    ok(streamdec->do_dec_begin && streamdec->do_dec_chunk && streamdec->do_dec_end && streamdec->do_dec_abort);
+    ok(enc->do_enc_begin != NULL && enc->do_enc_chunk != NULL && enc->do_enc_end != NULL);
+    for (size_t a = 0; a <= sizeof(aad); ++a) {
+        for (size_t split = 0; split <= 257; ++split) {
+            size_t written, len = 257;
+            memset(output, 0xa5, sizeof(output));
+            ptls_aead_encrypt(one, ref, input, len, 12345, aad, a);
+            int ret = enc->do_enc_begin(enc, 12345, aad, a);
+            ret |= enc->do_enc_chunk(enc, output + 1, input, split, &written);
+            ret |= written != split;
+            ret |= enc->do_enc_chunk(enc, output + 1 + split, input + split, len - split, &written);
+            ret |= written != len - split;
+            ret |= enc->do_enc_end(enc, output + 1 + len, 16, &written);
+            ok(ret == 0 && written == 16 && memcmp(ref, output + 1, len + 16) == 0);
+            ok(output[0] == 0xa5 && output[len + 17] == 0xa5);
+            memset(plain, 0xa5, sizeof(plain));
+            ret = streamdec->do_dec_begin(streamdec, 12345, aad, a);
+            ret |= streamdec->do_dec_chunk(streamdec, plain + 1, split, ref, split, &written);
+            ret |= written != split;
+            ret |= streamdec->do_dec_chunk(streamdec, plain + 1 + split, len - split,
+                                           ref + split, len - split, &written);
+            ret |= written != len - split;
+            ret |= streamdec->do_dec_end(streamdec, ref + len, 16);
+            ok(ret == 0 && memcmp(plain + 1, input, len) == 0);
+            ok(plain[0] == 0xa5 && plain[len + 1] == 0xa5);
+        }
+    }
+    for (size_t n = 0; n <= 16385; n = n == 0 ? 1 : n == 1 ? 1460 : n == 1460 ? 16384 : n + 1) {
+        size_t written;
+        int ret = enc->do_enc_begin(enc, n, aad, sizeof(aad));
+        ptls_aead_encrypt(one, ref, input, n, n, aad, sizeof(aad));
+        for (size_t off = 0; off < n;) {
+            size_t len = n - off < 1460 ? n - off : 1460;
+            ret |= enc->do_enc_chunk(enc, output + 1 + off, input + off, len, &written);
+            ret |= written != len;
+            off += len;
+        }
+        ret |= enc->do_enc_end(enc, output + 1 + n, 16, &written);
+        ok(ret == 0 && written == 16 && memcmp(ref, output + 1, n + 16) == 0);
+        ok(ptls_aead_decrypt(dec, plain, output + 1, n + 16, n, aad, sizeof(aad)) == n);
+        ok(memcmp(plain, input, n) == 0);
+        ret = streamdec->do_dec_begin(streamdec, n, aad, sizeof(aad));
+        for (size_t off = 0; off < n;) {
+            size_t len = n - off < 1 ? n - off : 1;
+            ret |= streamdec->do_dec_chunk(streamdec, plain + off, n - off, ref + off, len, &written);
+            ret |= written != len;
+            off += len;
+        }
+        ret |= streamdec->do_dec_end(streamdec, ref + n, 16);
+        ok(ret == 0 && memcmp(plain, input, n) == 0);
+    }
+    size_t written;
+    ok(enc->do_enc_begin(enc, 1, aad, (size_t)INT_MAX + 1) == PTLS_ERROR_LIBRARY);
+    ok(enc->do_enc_begin(enc, 1, aad, 1) == 0);
+    ok(enc->do_enc_chunk(enc, output, input, (size_t)INT_MAX + 1, &written) == PTLS_ERROR_LIBRARY && written == 0);
+    ok(enc->do_enc_end(enc, output, 15, &written) == PTLS_ERROR_LIBRARY && written == 0);
+    /* Force EVP itself to reject the operation; these must be checked in release builds too. */
+    EVP_CIPHER_CTX_reset(((struct aead_crypto_context_t *)enc)->evp_ctx);
+    ok(enc->do_enc_begin(enc, 1, aad, 1) == PTLS_ERROR_LIBRARY);
+    ok(enc->do_enc_chunk(enc, output, input, 1, &written) == PTLS_ERROR_LIBRARY && written == 0);
+    ok(enc->do_enc_end(enc, output, 16, &written) == PTLS_ERROR_LIBRARY && written == 0);
+    /* Authentication failure and capacity rejection terminate a private operation. */
+    ptls_aead_encrypt(one, ref, input, 257, 42, aad, sizeof(aad));
+    ok(streamdec->do_dec_begin(streamdec, 42, aad, sizeof(aad)) == 0);
+    ok(streamdec->do_dec_chunk(streamdec, plain, sizeof(plain), ref, 257, &written) == 0 && written == 257);
+    ref[257] ^= 1;
+    ok(streamdec->do_dec_end(streamdec, ref + 257, 16) == PTLS_ALERT_BAD_RECORD_MAC);
+    /* Rejected early-data authentication retains the installed traffic key. */
+    ref[257] ^= 1;
+    ok(streamdec->do_dec_begin(streamdec, 42, aad, sizeof(aad)) == 0);
+    ok(streamdec->do_dec_chunk(streamdec, plain, sizeof(plain), ref, 257, &written) == 0 && written == 257);
+    ok(streamdec->do_dec_end(streamdec, ref + 257, 16) == 0 && !memcmp(plain, input, 257));
+    ok(streamdec->do_dec_chunk(streamdec, plain, sizeof(plain), ref, 1, &written) == PTLS_ERROR_LIBRARY && written == 0);
+    ptls_aead_free(streamdec);
+    streamdec = ptls_aead_new_direct(algo, 0, key, iv);
+    ok(streamdec->do_dec_begin(streamdec, 42, aad, sizeof(aad)) == 0);
+    memset(plain, 0xa5, sizeof(plain));
+    ok(streamdec->do_dec_chunk(streamdec, plain, 1, ref, 2, &written) == PTLS_ERROR_LIBRARY && written == 0);
+    ok(plain[0] == 0xa5 && plain[1] == 0xa5);
+    ptls_aead_free(streamdec);
+    streamdec = ptls_aead_new_direct(algo, 0, key, iv);
+    ok(streamdec->do_dec_begin(streamdec, 42, aad, sizeof(aad)) == 0);
+    streamdec->do_dec_abort(streamdec);
+    ok(streamdec->do_dec_end(streamdec, ref + 257, 16) == PTLS_ERROR_LIBRARY);
+    ptls_aead_free(streamdec);
+    streamdec = ptls_aead_new_direct(algo, 0, key, iv);
+    ok(streamdec->do_dec_begin(streamdec, 42, aad, sizeof(aad)) == 0);
+    EVP_CIPHER_CTX_reset(((struct aead_crypto_context_t *)streamdec)->evp_ctx);
+    ok(streamdec->do_dec_chunk(streamdec, plain, sizeof(plain), ref, 1, &written) == PTLS_ERROR_LIBRARY && written == 0);
+    ptls_aead_free(streamdec);
+    ptls_aead_free(enc);
+    ptls_aead_free(one);
+    ptls_aead_free(dec);
+}
+
+static void test_serial(void)
+{
+    test_serial_aead(&ptls_openssl_aes128gcm);
+    test_serial_aead(&ptls_openssl_aes256gcm);
+#if PTLS_OPENSSL_HAVE_CHACHA20_POLY1305
+    test_serial_aead(&ptls_openssl_chacha20poly1305);
+#endif
+}
+
 int main(int argc, char **argv)
 {
     ptls_openssl_sign_certificate_t openssl_sign_certificate;
@@ -557,6 +674,7 @@ int main(int argc, char **argv)
     ENGINE_register_all_digests();
 #endif
 
+    subtest("serial-aead", test_serial);
     subtest("bf", test_bf);
     subtest("quiclb", test_quiclb, &ptls_openssl_quiclb);
 

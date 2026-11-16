@@ -1938,6 +1938,367 @@ static void test_grease_resumption(void)
     ctx_peer->ech.server.create_opener = orig_create_opener;
 }
 
+struct stream_test_endpoint {
+    ptls_t *tls;
+    uint8_t wire[65536], private[PTLS_RECEIVE_RECORD_CAPACITY], application[16384];
+    size_t off, reservation, private_size, app_size;
+    int committed, discarded, active;
+};
+
+static int stream_test_reserve(void *arg, size_t size)
+{
+    struct stream_test_endpoint *ep = arg;
+    if (size > sizeof(ep->wire) - ep->off)
+        return PTLS_ERROR_NO_MEMORY;
+    ep->reservation = size;
+    return 0;
+}
+static int stream_test_next(void *arg, void **base, size_t *capacity)
+{
+    struct stream_test_endpoint *ep = arg;
+    *base = ep->wire + ep->off;
+    *capacity = ep->reservation > 7 ? 7 : ep->reservation;
+    return 0;
+}
+static int stream_test_commit_wire(void *arg, size_t size)
+{
+    struct stream_test_endpoint *ep = arg;
+    ep->off += size;
+    ep->reservation -= size;
+    return 0;
+}
+static int stream_test_finish_wire(void *arg)
+{
+    return ((struct stream_test_endpoint *)arg)->reservation == 0 ? 0 : PTLS_ERROR_LIBRARY;
+}
+static void stream_test_discard_wire(void *arg)
+{
+    ((struct stream_test_endpoint *)arg)->reservation = 0;
+}
+static int stream_test_reserve_plain(void *arg, size_t size, void **base, size_t *capacity)
+{
+    struct stream_test_endpoint *ep = arg;
+    assert(!ep->active);
+    if (size > sizeof(ep->private))
+        return PTLS_ERROR_NO_MEMORY;
+    ep->private_size = size;
+    ep->active = 1;
+    *base = ep->private;
+    *capacity = sizeof(ep->private);
+    return 0;
+}
+static int stream_test_commit_plain(void *arg, size_t size)
+{
+    struct stream_test_endpoint *ep = arg;
+    assert(ep->active && size <= sizeof(ep->application));
+    memcpy(ep->application, ep->private, size);
+    ep->app_size = size;
+    ++ep->committed;
+    ep->active = 0;
+    return 0;
+}
+static void stream_test_discard_plain(void *arg)
+{
+    struct stream_test_endpoint *ep = arg;
+    ep->active = 0;
+    ++ep->discarded;
+}
+static int stream_test_call(struct stream_test_endpoint *ep, const void *input, size_t *length,
+                             ptls_handshake_properties_t *properties)
+{
+    ptls_record_sink_t output = {ep, stream_test_reserve, stream_test_next, stream_test_commit_wire,
+                                 stream_test_finish_wire, stream_test_discard_wire};
+    ptls_plaintext_sink_t plain = {ep, stream_test_reserve_plain, stream_test_commit_plain, stream_test_discard_plain};
+    int state = ep->tls->state;
+    uint64_t seq = ep->tls->traffic_protection.dec.seq;
+    int committed = ep->committed;
+    int ret = ptls_receive_stream(ep->tls, &plain, &output, input, length, properties);
+    if (ret == PTLS_ERROR_IN_PROGRESS && ep->tls->stream_rec.encrypted) {
+        assert(ep->tls->state == state && ep->tls->traffic_protection.dec.seq == seq);
+        assert(ep->committed == committed); /* No provisional application or protocol dispatch. */
+    }
+    /* In particular, encrypted handshake fragmentation must not enter parse_record's gather buffer. */
+    assert(ep->tls->recvbuf.rec.base == NULL);
+    return ret;
+}
+static int stream_test_feed(struct stream_test_endpoint *ep, const void *input, size_t *length, size_t step,
+                             ptls_handshake_properties_t *properties)
+{
+    size_t off = 0, total = *length;
+    int ret = PTLS_ERROR_IN_PROGRESS;
+    while (off < total) {
+        size_t n = total - off;
+        if (n > step)
+            n = step;
+        ret = stream_test_call(ep, (const uint8_t *)input + off, &n, properties);
+        off += n;
+        if (ret != 0 && ret != PTLS_ERROR_IN_PROGRESS)
+            break;
+        assert(n != 0);
+    }
+    *length = off;
+    return ret;
+}
+static int stream_test_async_destroyed;
+static void stream_test_destroy_async(ptls_async_job_t *job)
+{
+    ++stream_test_async_destroyed;
+}
+static void test_receive_stream_async(void)
+{
+    ptls_context_t client_ctx = *ctx, server_ctx = *ctx_peer;
+    ptls_sign_certificate_t signer = {async_sign_certificate};
+    server_ctx.sign_certificate = &signer;
+    for (int teardown = 0; teardown != 2; ++teardown) {
+        struct stream_test_endpoint c = {.tls = ptls_new(&client_ctx, 0)}, s = {.tls = ptls_new(&server_ctx, 1)};
+        if (ptls_receive_stream_check(c.tls) != 0 || ptls_receive_stream_check(s.tls) != 0) {
+            note("incremental handshake skipped for provider without checked serial callbacks");
+            ptls_free(c.tls);
+            ptls_free(s.tls);
+            return;
+        }
+        size_t n = 0;
+        ok(stream_test_call(&c, NULL, &n, NULL) == PTLS_ERROR_IN_PROGRESS && c.off != 0);
+        size_t hello_length = c.off;
+        const uint8_t ccs[] = {20, 3, 3, 0, 1, 1};
+        memcpy(c.wire + c.off, ccs, sizeof(ccs));
+        c.off += sizeof(ccs);
+        n = c.off;
+        ok(stream_test_feed(&s, c.wire, &n, 1, NULL) == PTLS_ERROR_ASYNC_OPERATION);
+        ok(n == hello_length && !s.active && s.committed == 0 && s.discarded != 0);
+        ptls_async_job_t *job = ptls_get_async_job(s.tls);
+        ok(job != NULL);
+        job->destroy_ = stream_test_destroy_async;
+        if (teardown) {
+            stream_test_async_destroyed = 0;
+            ptls_free(s.tls);
+            ok(stream_test_async_destroyed == 1 && !s.active);
+            ptls_free(c.tls);
+            continue;
+        }
+        size_t prefix = s.off;
+        int prefix_ret = stream_test_feed(&c, s.wire, &prefix, 1, NULL);
+        ok(prefix_ret == 0 || prefix_ret == PTLS_ERROR_IN_PROGRESS);
+        ok(prefix == s.off && c.committed == 0);
+        s.off = 0;
+        n = 0;
+        ok(stream_test_call(&s, NULL, &n, NULL) == 0 && s.off != 0);
+        n = sizeof(ccs);
+        ok(stream_test_feed(&s, c.wire + hello_length, &n, sizeof(ccs), NULL) == 0);
+        ok(n == sizeof(ccs));
+        c.off = 0;
+        n = s.off;
+        ok(stream_test_feed(&c, s.wire, &n, 1, NULL) == 0);
+        ok(n == s.off && ptls_handshake_is_complete(c.tls) && c.committed == 0);
+        n = c.off;
+        ok(stream_test_feed(&s, c.wire, &n, 1, NULL) == 0);
+        ok(n == c.off && ptls_handshake_is_complete(s.tls) && s.committed == 0);
+        /* Authenticated application data and KeyUpdate are coalesced, then close-notify. */
+        c.off = 0;
+        ptls_tx_t *tx = NULL;
+        ok(ptls_detach_tx(c.tls, &tx) == 0);
+        ptls_record_sink_t output = {&c, stream_test_reserve, stream_test_next, stream_test_commit_wire,
+                                     stream_test_finish_wire, stream_test_discard_wire};
+        ok(ptls_tx_key_chunks(tx, &output, 1) == 0);
+        ok(ptls_tx_send_chunks(tx, &output, "after async", 11) == 0);
+        n = c.off;
+        ok(stream_test_feed(&s, c.wire, &n, c.off, NULL) == 0);
+        ok(n == c.off && s.committed == 1 && s.app_size == 11 && memcmp(s.application, "after async", 11) == 0);
+        ok(ptls_take_key_update_request(s.tls) == 0); /* Attached Tx records the response in needs_key_update. */
+        c.off = 0;
+        ok(ptls_tx_alert_chunks(tx, &output, PTLS_ALERT_LEVEL_WARNING, PTLS_ALERT_CLOSE_NOTIFY) == 0);
+        n = c.off;
+        ok(stream_test_feed(&s, c.wire, &n, 1, NULL) == PTLS_ALERT_TO_PEER_ERROR(PTLS_ALERT_CLOSE_NOTIFY));
+        ok(s.committed == 1 && !s.active);
+        ptls_tx_free(tx);
+        ptls_free(s.tls);
+        ptls_free(c.tls);
+    }
+}
+
+static ptls_iovec_t stream_test_ticket;
+static int stream_test_save_ticket(ptls_save_ticket_t *self, ptls_t *tls, ptls_iovec_t input)
+{
+    if (stream_test_ticket.base == NULL) {
+        stream_test_ticket.base = malloc(input.len);
+        stream_test_ticket.len = input.len;
+        memcpy(stream_test_ticket.base, input.base, input.len);
+    }
+    return 0;
+}
+static void test_receive_stream_resumption(void)
+{
+    ptls_context_t client_ctx = *ctx, server_ctx = *ctx_peer;
+    ptls_encrypt_ticket_t et = {on_copy_ticket};
+    ptls_save_ticket_t st = {stream_test_save_ticket};
+    client_ctx.save_ticket = &st;
+    server_ctx.encrypt_ticket = &et;
+    server_ctx.ticket_lifetime = 86400;
+    stream_test_ticket = ptls_iovec_init(NULL, 0);
+    for (int round = 0; round != 3; ++round) {
+        server_ctx.max_early_data_size = round == 2 ? 0 : 8192;
+        struct stream_test_endpoint c = {.tls = ptls_new(&client_ctx, 0)}, s = {.tls = ptls_new(&server_ctx, 1)};
+        if (ptls_receive_stream_check(c.tls) != 0 || ptls_receive_stream_check(s.tls) != 0) {
+            note("incremental resumption skipped for provider without checked serial callbacks");
+            ptls_free(c.tls);
+            ptls_free(s.tls);
+            break;
+        }
+        size_t early_limit = 0;
+        ptls_handshake_properties_t cp = {0};
+        if (round != 0) {
+            cp.client.session_ticket = stream_test_ticket;
+            cp.client.max_early_data_size = &early_limit;
+        }
+        size_t n = 0;
+        ok(stream_test_call(&c, NULL, &n, &cp) == PTLS_ERROR_IN_PROGRESS);
+        if (round != 0) {
+            ok(early_limit == 8192);
+            ptls_buffer_t early;
+            ptls_buffer_init_tx(&early, "", 0);
+            ok(ptls_send(c.tls, &early, "early", 5) == 0);
+            memcpy(c.wire + c.off, early.base, early.off);
+            c.off += early.off;
+            ptls_buffer_dispose(&early);
+        }
+        n = c.off;
+        int ret = stream_test_feed(&s, c.wire, &n, 1, NULL);
+        ok((ret == 0 || ret == PTLS_ERROR_IN_PROGRESS) && n == c.off);
+        ok(s.committed == (round == 1));
+        if (round == 1)
+            ok(s.app_size == 5 && memcmp(s.application, "early", 5) == 0);
+        c.off = 0;
+        n = s.off;
+        ret = stream_test_feed(&c, s.wire, &n, 1, &cp);
+        ok((ret == 0 || ret == PTLS_ERROR_IN_PROGRESS) && n == s.off);
+        ok(ptls_handshake_is_complete(c.tls));
+        if (round != 0)
+            ok(cp.client.early_data_acceptance == (round == 1 ? PTLS_EARLY_DATA_ACCEPTED : PTLS_EARLY_DATA_REJECTED));
+        s.off = 0;
+        n = c.off;
+        ret = stream_test_feed(&s, c.wire, &n, 1, NULL);
+        ok((ret == 0 || ret == PTLS_ERROR_IN_PROGRESS) && n == c.off);
+        ok(ptls_handshake_is_complete(s.tls));
+        if (s.off != 0) {
+            n = s.off;
+            ret = stream_test_feed(&c, s.wire, &n, 1, &cp);
+            ok((ret == 0 || ret == PTLS_ERROR_IN_PROGRESS) && n == s.off);
+        }
+        ok(stream_test_ticket.base != NULL && c.committed == 0);
+        ok(ptls_is_psk_handshake(c.tls) == (round != 0));
+        ptls_free(c.tls);
+        ptls_free(s.tls);
+    }
+    free(stream_test_ticket.base);
+    stream_test_ticket = ptls_iovec_init(NULL, 0);
+}
+
+static unsigned stream_test_extension_calls;
+static int stream_test_extension(ptls_on_extension_t *self, ptls_t *tls, uint8_t type, uint16_t extension, ptls_iovec_t data)
+{
+    ++stream_test_extension_calls;
+    return 0;
+}
+static int stream_test_select_alpn(ptls_on_client_hello_t *self, ptls_t *tls, ptls_on_client_hello_parameters_t *params)
+{
+    if (params->negotiated_protocols.count != 1)
+        return PTLS_ALERT_NO_APPLICATION_PROTOCOL;
+    return ptls_set_negotiated_protocol(tls, (const char *)params->negotiated_protocols.list[0].base,
+                                       params->negotiated_protocols.list[0].len);
+}
+static void stream_test_transcript(ptls_t *tls, uint8_t *digest)
+{
+    ptls_hash_context_t *copy = tls->key_schedule->hashes[0].ctx->clone_(tls->key_schedule->hashes[0].ctx);
+    assert(copy != NULL);
+    copy->final(copy, digest, PTLS_HASH_FINAL_MODE_FREE);
+}
+static void test_receive_stream_authenticated_dispatch(void)
+{
+    ptls_context_t client_ctx = *ctx, server_ctx = *ctx_peer;
+    ptls_on_extension_t extension = {stream_test_extension};
+    ptls_on_client_hello_t alpn = {stream_test_select_alpn};
+    client_ctx.on_extension = &extension;
+    server_ctx.on_client_hello = &alpn;
+    for (int key_update = 0; key_update != 2; ++key_update) {
+        struct stream_test_endpoint c = {.tls = ptls_new(&client_ctx, 0)}, s = {.tls = ptls_new(&server_ctx, 1)};
+        ptls_tx_t *client_tx = NULL, *server_tx = NULL;
+        if (ptls_receive_stream_check(c.tls) != 0 || ptls_receive_stream_check(s.tls) != 0) {
+            note("incremental authenticated-dispatch skipped for provider without checked serial callbacks");
+            ptls_free(c.tls);
+            ptls_free(s.tls);
+            return;
+        }
+        ptls_iovec_t protocols[] = {ptls_iovec_init("stream-auth", 11)};
+        ptls_handshake_properties_t cp = {0};
+        cp.client.negotiated_protocols.list = protocols;
+        cp.client.negotiated_protocols.count = 1;
+        size_t n = 0;
+        ok(stream_test_call(&c, NULL, &n, &cp) == PTLS_ERROR_IN_PROGRESS);
+        n = c.off;
+        int ret = stream_test_feed(&s, c.wire, &n, 1, NULL);
+        ok((ret == 0 || ret == PTLS_ERROR_IN_PROGRESS) && n == c.off);
+        c.off = 0;
+        size_t offset = 0;
+        if (!key_update) {
+            while (offset < s.off && s.wire[offset] != PTLS_CONTENT_TYPE_APPDATA) {
+                size_t length = 5 + ((size_t)s.wire[offset + 3] << 8) + s.wire[offset + 4];
+                assert(length <= s.off - offset);
+                offset += length;
+            }
+            ok(offset != 0 && offset < s.off);
+            n = offset;
+            ret = stream_test_feed(&c, s.wire, &n, 1, &cp);
+            ok((ret == 0 || ret == PTLS_ERROR_IN_PROGRESS) && n == offset);
+            ok(c.tls->state == PTLS_STATE_CLIENT_EXPECT_ENCRYPTED_EXTENSIONS && c.tls->negotiated_protocol == NULL);
+        } else {
+            n = s.off;
+            ret = stream_test_feed(&c, s.wire, &n, 1, &cp);
+            ok((ret == 0 || ret == PTLS_ERROR_IN_PROGRESS) && n == s.off);
+            n = c.off;
+            ret = stream_test_feed(&s, c.wire, &n, 1, NULL);
+            ok((ret == 0 || ret == PTLS_ERROR_IN_PROGRESS) && n == c.off);
+            ok(ptls_handshake_is_complete(c.tls) && ptls_handshake_is_complete(s.tls));
+            ok(ptls_detach_tx(c.tls, &client_tx) == 0 && ptls_detach_tx(s.tls, &server_tx) == 0);
+            s.off = 0;
+            ptls_record_sink_t output = {&s, stream_test_reserve, stream_test_next, stream_test_commit_wire,
+                                         stream_test_finish_wire, stream_test_discard_wire};
+            ok(ptls_tx_key_chunks(server_tx, &output, 1) == 0);
+        }
+        size_t length = 5 + ((size_t)s.wire[offset + 3] << 8) + s.wire[offset + 4];
+        assert(length <= s.off - offset && s.wire[offset] == PTLS_CONTENT_TYPE_APPDATA);
+        s.wire[offset + length - 1] ^= 1;
+        int state = c.tls->state;
+        uint64_t seq = c.tls->traffic_protection.dec.seq;
+        size_t epoch = c.tls->traffic_protection.dec.epoch, buffered = c.tls->recvbuf.mess.off;
+        uint32_t requests = c.tls->key_update_requests;
+        unsigned needs_update = c.tls->needs_key_update, callbacks = stream_test_extension_calls;
+        char *protocol = c.tls->negotiated_protocol;
+        uint8_t secret[PTLS_MAX_DIGEST_SIZE], before[PTLS_MAX_DIGEST_SIZE], after[PTLS_MAX_DIGEST_SIZE];
+        memcpy(secret, c.tls->traffic_protection.dec.secret, sizeof(secret));
+        stream_test_transcript(c.tls, before);
+        n = length;
+        ok(stream_test_feed(&c, s.wire + offset, &n, 1, &cp) == PTLS_ALERT_BAD_RECORD_MAC && n == length);
+        stream_test_transcript(c.tls, after);
+        ok(c.tls->state == state && c.tls->traffic_protection.dec.seq == seq &&
+           c.tls->traffic_protection.dec.epoch == epoch && c.tls->recvbuf.mess.off == buffered);
+        ok(c.tls->key_update_requests == requests && c.tls->needs_key_update == needs_update &&
+           c.tls->negotiated_protocol == protocol && stream_test_extension_calls == callbacks);
+        ok(memcmp(secret, c.tls->traffic_protection.dec.secret, sizeof(secret)) == 0);
+        ok(memcmp(before, after, c.tls->cipher_suite->hash->digest_size) == 0);
+        ok(c.committed == 0 && !c.active && c.tls->stream_rec.failed);
+        int cleared = 1;
+        for (size_t i = 0; i != length - 5 - c.tls->cipher_suite->aead->tag_size; ++i)
+            cleared &= c.private[i] == 0;
+        ok(cleared);
+        n = length;
+        ok(stream_test_call(&c, s.wire + offset, &n, &cp) == PTLS_ERROR_LIBRARY && n == 0);
+        ptls_tx_free(client_tx);
+        ptls_tx_free(server_tx);
+        ptls_free(c.tls);
+        ptls_free(s.tls);
+    }
+}
+
 static void test_async_sign_certificate(void)
 {
     assert(ctx_peer->sign_certificate->cb == sign_certificate);
@@ -2733,6 +3094,9 @@ static void test_all_handshakes_core(void)
     if (test_client_ech_configs.base != NULL)
         subtest("resumption-with-grease", test_grease_resumption);
     subtest("async-sign-certificate", test_async_sign_certificate);
+    subtest("receive-stream-async", test_receive_stream_async);
+    subtest("receive-stream-resumption", test_receive_stream_resumption);
+    subtest("receive-stream-authenticated-dispatch", test_receive_stream_authenticated_dispatch);
     subtest("enforce-retry-stateful", test_enforce_retry_stateful);
     if (!(ctx_peer->ech.server.create_opener != NULL && test_client_ech_configs.base != NULL)) {
         subtest("hrr-stateless-handshake", test_hrr_stateless_handshake);

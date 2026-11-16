@@ -1,0 +1,21 @@
+Source: zpicotls
+Section: libs
+Priority: optional
+Maintainer: Huw Rogers <hrogers@kaldron.io>
+Build-Depends: debhelper-compat (= 13),
+ cmake,
+ libbrotli-dev,
+ libssl-dev,
+ pkgconf
+Standards-Version: 4.7.0
+Homepage: https://github.com/kaldron-labs/zpicotls
+Rules-Requires-Root: no
+
+Package: zpicotls
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, libbrotli-dev, libssl-dev
+Description: TLS library with minicrypto and OpenSSL backends
+ zpicotls is a TLS protocol library. This package contains the shared
+ libraries, public headers, and pkg-config files for the core library and
+ its minicrypto and OpenSSL backends. On supported CPUs it also includes
+ the fusion backend.

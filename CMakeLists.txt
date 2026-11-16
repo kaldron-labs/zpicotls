@@ -1,7 +1,7 @@
 CMAKE_MINIMUM_REQUIRED(VERSION 2.8.12...4.0)
 CMAKE_POLICY(SET CMP0003 NEW)
 
-PROJECT(zpicotls VERSION 1.7.1)
+PROJECT(zpicotls VERSION 2.0)
 
 INCLUDE(GNUInstallDirs)
 
@@ -187,6 +187,15 @@ IF (OPENSSL_FOUND AND NOT (OPENSSL_VERSION VERSION_LESS "1.0.1"))
     LIST(APPEND PTLSBENCH_LIBS zpicotls-openssl ${OPENSSL_CRYPTO_LIBRARIES} ${AEGIS_LIBRARIES} ${CMAKE_DL_LIBS})
 
     SET(TEST_EXES ${TEST_EXES} test-openssl.t)
+    # Uses the normal core DSO: memory-debug deliberately forces allocations.
+    ADD_EXECUTABLE(test-exact-rx.t t/exact-rx.c deps/picotest/picotest.c)
+    TARGET_LINK_LIBRARIES(test-exact-rx.t zpicotls-openssl zpicotls-core)
+    SET(TEST_EXES ${TEST_EXES} test-exact-rx.t)
+    IF (WITH_FUSION)
+        ADD_EXECUTABLE(test-vector-tx.t t/vector-tx.c deps/picotest/picotest.c)
+        TARGET_LINK_LIBRARIES(test-vector-tx.t zpicotls-openssl zpicotls-fusion zpicotls-core)
+        SET(TEST_EXES ${TEST_EXES} test-vector-tx.t)
+    ENDIF ()
 ELSE ()
     MESSAGE(WARNING "Disabling OpenSSL support (requires 1.0.1 or newer)")
 ENDIF ()
@@ -307,6 +316,14 @@ IF (BUILD_FUZZER)
     TARGET_LINK_LIBRARIES(fuzz-client-hello zpicotls-core zpicotls-openssl ${OPENSSL_CRYPTO_LIBRARIES} ${AEGIS_LIBRARIES} ${LIB_FUZZER})
 
 ENDIF()
+
+# Install versioned SONAMEs and linker symlinks; bump the ABI number for
+# incompatible changes to the public library interface.
+foreach(target zpicotls-core zpicotls-minicrypto zpicotls-fusion zpicotls-openssl zpicotls-mbedtls)
+    if (TARGET ${target})
+        set_target_properties(${target} PROPERTIES VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR})
+    endif()
+endforeach()
 
 install(FILES include/zpicotls.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(DIRECTORY include/zpicotls DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}

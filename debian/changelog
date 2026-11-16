@@ -1,0 +1,28 @@
+zpicotls (2.0-1) unstable; urgency=medium
+
+  * Add checked streaming record transmission and authenticated receive.
+  * Make outbound publication failures terminal and retain contiguous fast paths.
+  * Eliminate capability-probe allocations and redundant handshake copies.
+  * Bump the library ABI to 2 for expanded public buffer and AEAD structures.
+
+ -- Huw Rogers <hrogers@kaldron.io>  Sat, 14 Nov 2026 00:00:00 +0000
+
+zpicotls (1.7-1) unstable; urgency=medium
+
+  * Bump the minor version to 1.7 for detached vector transmission.
+  * Include the Fusion GHASH lane fix and exact receive-buffer sizing.
+
+ -- Huw Rogers <hrogers@kaldron.io>  Tue, 03 Nov 2026 11:16:31 +0000
+
+zpicotls (1.6-3) unstable; urgency=medium
+
+  * Install versioned shared libraries with an ABI 1 SONAME.
+
+ -- Huw Rogers <hrogers@kaldron.io>  Sat, 17 Oct 2026 00:00:00 +0000
+
+zpicotls (1.6-2) unstable; urgency=medium
+
+  * Add local Debian packaging for the shared libraries, headers, and
+    pkg-config files.
+
+ -- Huw Rogers <hrogers@kaldron.io>  Sat, 17 Oct 2026 00:00:00 +0000

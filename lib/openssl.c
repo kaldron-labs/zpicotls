@@ -1481,6 +1481,7 @@ struct aead_crypto_context_t {
     ptls_aead_context_t super;
     EVP_CIPHER_CTX *evp_ctx;
     uint8_t static_iv[PTLS_MAX_IV_SIZE];
+    int dec_active;
 };
 
 static void aead_dispose_crypto(ptls_aead_context_t *_ctx)
@@ -1503,6 +1504,115 @@ static void aead_set_iv(ptls_aead_context_t *_ctx, const void *iv)
     struct aead_crypto_context_t *ctx = (struct aead_crypto_context_t *)_ctx;
 
     memcpy(ctx->static_iv, iv, ctx->super.algo->iv_size);
+}
+
+static int aead_enc_begin(ptls_aead_context_t *_ctx, uint64_t seq, const void *aad, size_t aadlen)
+{
+    struct aead_crypto_context_t *ctx = (void *)_ctx;
+    uint8_t iv[PTLS_MAX_IV_SIZE];
+    int len;
+    if (aadlen > INT_MAX)
+        return PTLS_ERROR_LIBRARY;
+    ptls_aead__build_iv(_ctx->algo, iv, ctx->static_iv, seq);
+    if (!EVP_EncryptInit_ex(ctx->evp_ctx, NULL, NULL, NULL, iv) ||
+        (aadlen != 0 && !EVP_EncryptUpdate(ctx->evp_ctx, NULL, &len, aad, (int)aadlen)))
+        return PTLS_ERROR_LIBRARY;
+    return 0;
+}
+
+static int aead_enc_chunk(ptls_aead_context_t *_ctx, void *output, const void *input, size_t length, size_t *written)
+{
+    struct aead_crypto_context_t *ctx = (void *)_ctx;
+    int len;
+    *written = 0;
+    if (length > INT_MAX || !EVP_EncryptUpdate(ctx->evp_ctx, output, &len, input, (int)length) || len != length)
+        return PTLS_ERROR_LIBRARY;
+    *written = len;
+    return 0;
+}
+
+static int aead_enc_end(ptls_aead_context_t *_ctx, void *output, size_t capacity, size_t *written)
+{
+    struct aead_crypto_context_t *ctx = (void *)_ctx;
+    uint8_t final[EVP_MAX_BLOCK_LENGTH];
+    int len;
+    *written = 0;
+    if (capacity < _ctx->algo->tag_size || !EVP_EncryptFinal_ex(ctx->evp_ctx, final, &len) || len != 0 ||
+        !EVP_CIPHER_CTX_ctrl(ctx->evp_ctx, EVP_CTRL_GCM_GET_TAG, (int)_ctx->algo->tag_size, output))
+        return PTLS_ERROR_LIBRARY;
+    *written = _ctx->algo->tag_size;
+    return 0;
+}
+
+/* Only GCM and ChaCha20-Poly1305 install these callbacks. Their update calls
+ * emit exactly the input size; final emits no additional plaintext. */
+static int aead_dec_error(struct aead_crypto_context_t *ctx, int error)
+{
+    ctx->dec_active = 0;
+    EVP_CIPHER_CTX_reset(ctx->evp_ctx);
+    return error;
+}
+
+static void aead_dec_abort(ptls_aead_context_t *_ctx)
+{
+    aead_dec_error((void *)_ctx, PTLS_ERROR_LIBRARY);
+}
+
+static int aead_dec_begin(ptls_aead_context_t *_ctx, uint64_t seq, const void *aad, size_t aadlen)
+{
+    struct aead_crypto_context_t *ctx = (void *)_ctx;
+    uint8_t iv[PTLS_MAX_IV_SIZE];
+    int len;
+    if (ctx->dec_active || aadlen > INT_MAX || (aadlen != 0 && aad == NULL))
+        return aead_dec_error(ctx, PTLS_ERROR_LIBRARY);
+    ptls_aead__build_iv(_ctx->algo, iv, ctx->static_iv, seq);
+    int ret = EVP_DecryptInit_ex(ctx->evp_ctx, NULL, NULL, NULL, iv);
+    ptls_clear_memory(iv, sizeof(iv));
+    if (!ret || (aadlen != 0 && !EVP_DecryptUpdate(ctx->evp_ctx, NULL, &len, aad, (int)aadlen)))
+        return aead_dec_error(ctx, PTLS_ERROR_LIBRARY);
+    ctx->dec_active = 1;
+    return 0;
+}
+
+static int aead_dec_chunk(ptls_aead_context_t *_ctx, void *output, size_t capacity,
+                          const void *input, size_t length, size_t *written)
+{
+    struct aead_crypto_context_t *ctx = (void *)_ctx;
+    int len;
+    *written = 0;
+    if (!ctx->dec_active || length > capacity || length > INT_MAX ||
+        (length != 0 && (output == NULL || input == NULL)))
+        return aead_dec_error(ctx, PTLS_ERROR_LIBRARY);
+    if (length != 0 && (!EVP_DecryptUpdate(ctx->evp_ctx, output, &len, input, (int)length) || len != length))
+        return aead_dec_error(ctx, PTLS_ERROR_LIBRARY);
+    *written = length;
+    return 0;
+}
+
+static int aead_dec_end(ptls_aead_context_t *_ctx, const void *tag, size_t taglen)
+{
+    struct aead_crypto_context_t *ctx = (void *)_ctx;
+    uint8_t final[EVP_MAX_BLOCK_LENGTH];
+    int len;
+    if (!ctx->dec_active || tag == NULL || taglen != _ctx->algo->tag_size ||
+        !EVP_CIPHER_CTX_ctrl(ctx->evp_ctx, EVP_CTRL_GCM_SET_TAG, (int)taglen, (void *)tag))
+        return aead_dec_error(ctx, PTLS_ERROR_LIBRARY);
+    int ret = EVP_DecryptFinal_ex(ctx->evp_ctx, final, &len);
+    ptls_clear_memory(final, sizeof(final));
+    if (!ret) {
+        /* Rejected early data may be skipped before the next protected record.
+         * Reset the per-record provider state while retaining the installed key.
+         * A fresh nonce on begin replaces this unused clearing nonce. */
+        uint8_t cleared_iv[PTLS_MAX_IV_SIZE] = {0};
+        ctx->dec_active = 0;
+        if (!EVP_DecryptInit_ex(ctx->evp_ctx, NULL, NULL, NULL, cleared_iv))
+            return aead_dec_error(ctx, PTLS_ERROR_LIBRARY);
+        return PTLS_ALERT_BAD_RECORD_MAC;
+    }
+    if (len != 0)
+        return aead_dec_error(ctx, PTLS_ERROR_LIBRARY);
+    ctx->dec_active = 0;
+    return 0;
 }
 
 static void aead_do_encrypt_init(ptls_aead_context_t *_ctx, uint64_t seq, const void *aad, size_t aadlen)
@@ -1589,10 +1699,18 @@ static int aead_setup_crypto(ptls_aead_context_t *_ctx, int is_enc, const void *
     struct aead_crypto_context_t *ctx = (struct aead_crypto_context_t *)_ctx;
     int ret;
 
+    ctx->dec_active = 0;
+    ctx->super.do_dec_begin = is_enc ? NULL : aead_dec_begin;
+    ctx->super.do_dec_chunk = is_enc ? NULL : aead_dec_chunk;
+    ctx->super.do_dec_end = is_enc ? NULL : aead_dec_end;
+    ctx->super.do_dec_abort = is_enc ? NULL : aead_dec_abort;
     ctx->super.dispose_crypto = aead_dispose_crypto;
     ctx->super.do_get_iv = aead_get_iv;
     ctx->super.do_set_iv = aead_set_iv;
     if (is_enc) {
+        ctx->super.do_enc_begin = aead_enc_begin;
+        ctx->super.do_enc_chunk = aead_enc_chunk;
+        ctx->super.do_enc_end = aead_enc_end;
         ctx->super.do_encrypt_init = aead_do_encrypt_init;
         ctx->super.do_encrypt_update = aead_do_encrypt_update;
         ctx->super.do_encrypt_final = aead_do_encrypt_final;
@@ -2478,7 +2596,9 @@ ptls_aead_algorithm_t ptls_openssl_aes128gcm = {"AES128-GCM",
                                                 0,
                                                 0,
                                                 sizeof(struct aead_crypto_context_t),
-                                                aead_aes128gcm_setup_crypto};
+                                                aead_aes128gcm_setup_crypto,
+                                                 1,
+                                                 1};
 ptls_cipher_algorithm_t ptls_openssl_aes256ecb = {
     "AES256-ECB",          PTLS_AES256_KEY_SIZE, PTLS_AES_BLOCK_SIZE, 0 /* iv size */, sizeof(struct cipher_context_t),
     aes256ecb_setup_crypto};
@@ -2497,7 +2617,9 @@ ptls_aead_algorithm_t ptls_openssl_aes256gcm = {"AES256-GCM",
                                                 0,
                                                 0,
                                                 sizeof(struct aead_crypto_context_t),
-                                                aead_aes256gcm_setup_crypto};
+                                                aead_aes256gcm_setup_crypto,
+                                                 1,
+                                                 1};
 ptls_hash_algorithm_t ptls_openssl_sha256 = {"sha256", PTLS_SHA256_BLOCK_SIZE, PTLS_SHA256_DIGEST_SIZE, sha256_create,
                                              PTLS_ZERO_DIGEST_SHA256};
 ptls_hash_algorithm_t ptls_openssl_sha384 = {"sha384", PTLS_SHA384_BLOCK_SIZE, PTLS_SHA384_DIGEST_SIZE, sha384_create,
@@ -2564,6 +2686,8 @@ ptls_aead_algorithm_t ptls_openssl_chacha20poly1305 = {
 #else
     .context_size = sizeof(struct aead_crypto_context_t),
     .setup_crypto = aead_chacha20poly1305_setup_crypto,
+    .serial_encrypt = 1,
+    .serial_decrypt = 1,
 #endif
 };
 ptls_cipher_suite_t ptls_openssl_chacha20poly1305sha256 = {.id = PTLS_CIPHER_SUITE_CHACHA20_POLY1305_SHA256,

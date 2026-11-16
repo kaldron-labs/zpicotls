@@ -93,6 +93,22 @@ void ptls_fusion_aesgcm_encrypt(ptls_fusion_aesgcm_context_t *ctx, void *output,
 int ptls_fusion_aesgcm_decrypt(ptls_fusion_aesgcm_context_t *ctx, void *output, const void *input, size_t inlen, __m128i ctr,
                                const void *aad, size_t aadlen, const void *tag);
 
+/** Checked, bounded serial AES-GCM encryption. Destinations may be unaligned.
+ * begin initializes one AEAD operation; chunk emits exactly length bytes; end emits its tag.
+ * A callback error clears the serial state and makes that operation terminal.
+ */
+int ptls_fusion_aead_enc_begin(ptls_aead_context_t *ctx, uint64_t seq, const void *aad, size_t aadlen);
+int ptls_fusion_aead_enc_chunk(ptls_aead_context_t *ctx, void *output, const void *input, size_t length, size_t *written);
+int ptls_fusion_aead_enc_end(ptls_aead_context_t *ctx, void *output, size_t capacity, size_t *written);
+
+/** Serial decryption writes provisional plaintext into the checked destination.
+ * Only a successful end authenticates it; abort clears an unfinished operation. */
+int ptls_fusion_aead_dec_begin(ptls_aead_context_t *ctx, uint64_t seq, const void *aad, size_t aadlen);
+int ptls_fusion_aead_dec_chunk(ptls_aead_context_t *ctx, void *output, size_t capacity,
+                              const void *input, size_t length, size_t *written);
+int ptls_fusion_aead_dec_end(ptls_aead_context_t *ctx, const void *tag, size_t taglen);
+void ptls_fusion_aead_dec_abort(ptls_aead_context_t *ctx);
+
 /**
  * A boolean flag indicating if vaes and vpclmulqdq (256-bit crypto instructions) should be used. This flag is set automatically
  * when `ptls_fusion_is_supported_by_cpu` is called. Users can update the flag to enforce behavior. Engines that do not have support
